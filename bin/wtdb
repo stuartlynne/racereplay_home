@@ -1,0 +1,831 @@
+#!/usr/bin/perl 
+
+#
+# Usage:
+#
+#       wtdb venue [directory]
+#       wtdb hostname port [directory]
+#
+# Connect to hostname:port, collect data and store in:
+#
+#       [directory/]laps-$Venue-$Date.csv
+#
+# The venue is determined from the venues.csv active entry.
+#
+# The date is determined from the timestamp of the received data.
+#
+# This is a persistent server. It will continue to connect to the specified
+# host and collected data until stopped. 
+#
+# This service is reasonably robost if restarted.  Typically this will be connecting to a
+# service that delivers all # current data from the timing system. A stop and restart may collect 
+# and save the same data. So some care must be taken to ignore duplicate # entries in the laps data.
+#
+# The server is designed to close the socket and attempt to re-establish a connection if there
+# is a TCP KEEPALIVE timeout. This allows the service to be robust for the following failures:
+#
+#       1. Network outage for more than 10 seconds
+#       2. WT Active restart
+#       3. Network outage with WT Active restart before network re-established.
+#
+# The only time that timing data will not be recorded is the following:
+#
+#       1. Network outage
+#       2. WT Active Restart
+#       3. Data collected - this data will be lost
+#       4. WT Active Restart
+#       5. Network re-established
+#
+# In practice this should not be a huge problem.
+#
+# The script can be used either as a daemon or as a command line tool to rebuild
+# the lapd files from an existing RACE file.
+#
+# In daemon mode the server send log appropriate information to syslog.
+#
+# N.B. On reconnecting the WT Active unit resends all current data. The eventid and rx
+# fields are used to exclude data already recorded.
+#
+# N.B. On restarting or reconnecting the data from previous days may be received. The
+# server will walk through the existing files to determine the maximum rx number for
+# each file so that it can correctly exclude data even for previous days.
+#
+# N.B. When creating the lapd file for the first time, the column titles will be
+# written out.
+#
+# Signals
+#       1. SIGHUP - restart
+#       2. SIGTERM - exit
+# 
+#
+# 
+
+
+use strict;
+use warnings;
+
+
+my $TZ = 'PST8PDT';
+
+use DBI;
+use CGI ':standard';
+
+use Text::CSV;
+use Getopt::Std;
+use Switch;
+use Scalar::Util qw(looks_like_number);
+use IO::Socket;
+use IO::Socket::INET;
+use Socket qw(IPPROTO_TCP SOL_SOCKET SO_LINGER SO_KEEPALIVE inet_aton sockaddr_in TCP_NODELAY);
+#use Socket::Linux ;
+use Socket::Linux qw(TCP_NODELAY TCP_KEEPIDLE TCP_KEEPINTVL TCP_KEEPCNT);
+use IO::Select;
+use Time::CTime;
+use Sys::Syslog qw (:standard :macros);
+
+use DateTime;
+use DateTime::TimeZone;
+use DateTime::Locale;
+use DateTime::Format::Strptime;
+#use DateTime::Duration;
+use Data::Dumper;
+
+
+
+# WActive CSV Codes
+#
+my $WACTIVE_RX = 0;
+my $WACTIVE_TAGID = 1;
+my $WACTIVE_DATE = 2;
+my $WACTIVE_WTIME_HHMMSS = 3;
+my $WACTIVE_WTIME_MS = 4;
+my $WACTIVE_BATT = 5;
+my $WACTIVE_EVENT = 6;
+my $WACTIVE_BOX = 7;
+my $WACTIVE_CORR = 8;
+my $WACTIVE_STIME_HHMMSS = 9;
+my $WACTIVE_STIME_MS = 10;
+
+#
+# lapd csv fields
+#
+my $lapd_datestamp      = 0;
+my $lapd_venue          = 1;
+my $lapd_boxid          = 2;
+my $lapd_eventid        = 3;
+my $lapd_rx             = 4;
+my $lapd_tagid          = 5;
+my $lapd_corr           = 6;
+my $lapd_finishms       = 7;
+my $lapd_startms        = 8;
+my $lapd_groupms        = 9;
+my $lapd_lapms          = 10;
+
+sub usage {
+    printf STDERR "Usage: wtdb [venue] | [ipaddr port [hostname]]\n";
+    printf STDERR "\tvenue - read WT Ative RACE CSV file on STDIN, output processed data on STDOUT\n";
+    printf STDERR "\tipaddr port - connect to ipaddr:port, save in /var/racereplay/laps.*csv\n";
+    printf STDERR "\tipaddr port hostname - connect to ipaddr:port, forward to hostname\n";
+    exit;
+}
+
+my $VenueName = "novenue";
+my $ServerMode = 0;
+my $IPAddress;
+my $Port;
+
+#my $VenueName = $ARGV[0];
+#shift @ARGV || die usage;
+
+my $dbh;
+
+sub get_active_venue {
+    
+    my $sql = sprintf ( "SELECT * FROM venues where ActiveFlag = '1'");
+    my $sth = $dbh->prepare($sql);;
+    $sth->execute() || die "Execute failed\n";
+    
+    my $row_ref = $sth->fetchrow_hashref;
+    $sth->finish();
+
+    unless(defined($row_ref)) {
+        printf STDERR "No active venue\n";
+        return "novenue";
+    }
+
+    unless(defined($row_ref->{'venue'})) {
+        printf STDERR "No active venue\n";
+        return "novenue";
+    }
+    
+    return $row_ref->{'venue'};
+}
+
+sub get_venue_info {
+    
+    my ($active) = @_;
+
+    my $sql = sprintf ( "SELECT * FROM venues where Venue = '%s'", $active);
+    my $sth = $dbh->prepare($sql);;
+    $sth->execute() || die "Execute failed\n";
+    
+    my $row_ref = $sth->fetchrow_hashref;
+    $sth->finish();
+
+    unless(defined($row_ref)) {
+        printf STDERR "No active venue\n";
+        return;
+    }
+
+    unless(defined($row_ref->{'venue'})) {
+        printf STDERR "No active venue\n";
+        return "novenue";
+    }
+    
+    # return hashref
+    #
+    printf STDERR "Organizer: %s description %s\n", $active, $row_ref->{ 'description' };
+    return $row_ref;
+}
+
+#my $Users_ref;
+
+
+# ################################################################################################################### #
+
+# print a cell in double quotes, followed by a comma or carriage return for the last cell on
+# a line.
+#
+sub print_csv_str {
+    my ($cell, $last) = @_;
+    printf FOUT "\"%s\"", $cell;
+    if ($last) { printf FOUT "\n"; FOUT->flush; } 
+    else { printf FOUT ","; }
+}
+
+# convert a timestamp hh:mm::ss + milliseconds to the total number of milliseconds.
+#
+sub get_ms {
+    my ($xtime, $mstime) = @_;
+    my @values = split(/\./,$xtime);
+    return 0 unless (looks_like_number($values[0]));
+    return 0 unless (looks_like_number($values[1]));
+    return 0 unless (looks_like_number($values[2]));
+
+    return (($values[0] * 60*60 + $values[1] * 60 + $values[2] ) * 1000 + $mstime);
+}
+
+# ################################################################################################################### #
+
+my $NextRX = 0;
+
+my $CurrentFileDate = "";
+my $FoutFilename = "";
+
+sub openfout {
+
+    my ($csv, $venuename, $datestamp) = @_;
+
+    return 0 if ($datestamp eq $CurrentFileDate);
+    $CurrentFileDate = $datestamp;
+    
+    if ($FoutFilename ne "") {
+        printf STDERR "CLOSING %s\n", $FoutFilename;
+        close FOUT;
+        $FoutFilename = "";
+    }
+
+    my $firstflag = 0;
+    my $filename = sprintf("lapd-%s-%s.csv", $venuename, $datestamp);
+
+    $FoutFilename = $filename;
+
+    # test file exists
+    #
+    if (-e $filename && -s $filename) {
+
+        my $filename = sprintf("<lapd-%s-%s.csv", $venuename, $datestamp);
+        open (FIN, $filename) || die "Cannot open $filename\n";
+        
+        # Count rx
+        #
+        my $firstline = 1;
+        while(<FIN>) {
+            my $status = $csv->parse($_);
+            my @fields = $csv->fields();
+            if ($firstline) {
+                $firstline = 0;
+                next;
+            }
+            next if ($#fields == 0);
+            my $rx = $fields[$lapd_rx];
+            next unless (defined($rx));
+            $NextRX = hex($rx);
+            #printf STDERR "Checking RX: %s %s\n", $NextRX, $rx;
+        }
+        close(FIN);
+        $firstflag = 0;
+    }
+    else {
+        $firstflag = 1;
+        $NextRX = 0;
+    }
+    printf STDERR "PREV %s NextRX: %s firstflag: %d\n", $filename, $NextRX, $firstflag;
+
+    $filename = sprintf(">>lapd-%s-%s.csv", $venuename, $datestamp);
+    open (FOUT, $filename) || die "Cannot open $filename\n";
+    
+    # ensure that we have column titles
+    #
+    if ($firstflag) {
+
+        printf STDERR "NEW %s\n", $filename;
+
+        print_csv_str("datestamp", 0);  # 0
+        print_csv_str("venue", 0);      # 1
+        print_csv_str("boxid", 0);      # 2
+        print_csv_str("eventid", 0);    # 3
+        print_csv_str("rx", 0);         # 4
+        print_csv_str("tagid", 0);      # 5
+        print_csv_str("batt", 0);       # 6
+        print_csv_str("corr", 0);       # 7 
+        print_csv_str("finishms", 0);   # 8 
+        print_csv_str("startms", 0);    # 9 
+        print_csv_str("groupms", 0);    # 10
+        print_csv_str("lapms", 0);      # 11
+        print_csv_str("lapnumber", 0);  # 12
+        print_csv_str("groupnumber", 0);# 13
+        print_csv_str("gapms", 0);      # 14
+        print_csv_str("skippedflag", 1); # 15
+    }
+
+    printf STDERR "OPENING %s\n", $FoutFilename;
+
+    if ($ServerMode) {
+        my $loginfo = sprintf("File: %s", $filename);
+        syslog('warning', $loginfo);
+    }
+
+    return 1;
+}
+
+my %LastSeen;
+my %LapNumber;
+my $GroupStartMS = 0;
+my $GroupLastMS = 0;
+my $GroupNumber = 0;
+
+my %Corrections;
+my %MissingLaps;
+my %BatteryFlag;
+my %CountedLaps;
+my %TotalMissingLaps;
+my %TotalCountedLaps;
+
+my $CurrentEvent = "";
+
+sub process {
+
+    my ($csv, $line, $count, $organizer, $distance, $mintime, $maxtime, $gaptime, $venuename, $tz) = @_;
+
+    my $date_format = new DateTime::Format::Strptime( pattern => '%F %T', time_zone => $tz,);
+
+    my $skippedflag = 0;
+
+    my $gamps = 0;
+
+
+    # trim the linefeed, parse the line and retrieve the fields and TAGID
+    #
+    chop($line);
+    my $status = $csv->parse($line);
+    my @fields = $csv->fields();
+    return if ($#fields == 0);
+    my $tagid = $fields[1];
+    return unless (defined($tagid));
+    return if ($tagid eq "TAG_ID");
+
+    # 
+    # create our timestamp
+    #
+    my $date = $fields[$WACTIVE_DATE];
+    my $hhmmss = $fields[$WACTIVE_WTIME_HHMMSS];
+    $date =~ s/\//-/g;
+    $hhmmss =~ s/\./:/g;
+    my $timestamp = "$date $hhmmss";
+
+    my $dt = $date_format->parse_datetime($timestamp) || die $DateTime::Format::Strptime::errmsg;
+    if ($TZ ne $tz) {
+        $dt->set_time_zone($TZ);
+        $timestamp = $dt->strftime("%Y-%m-%d %H:%M:%s");
+    }
+
+
+    # 
+    # get file datestamp and ensure correct file is open
+    #
+    my $filedate = $dt->strftime("%Y%m%d");
+    #$filedate =~ s/\///g;
+    if (openfout($csv, $venuename, $filedate)) {
+        undef %LastSeen;
+        undef %LapNumber;
+        $GroupStartMS = 0;
+    }
+
+
+    # get event and rx
+    #
+    my $event = $fields[$WACTIVE_EVENT];
+    my $rx = hex($fields[$WACTIVE_RX]);
+
+    if ($event ne $CurrentEvent) {
+        #$NextRX = 0;
+        $CurrentEvent = $event;
+        $GroupStartMS = 0;
+        $GroupLastMS = 0;
+        $GroupNumber = 0;
+    }
+
+    return if ($NextRX > $rx);
+    $NextRX = $rx;
+
+    # compute the elapsed time in milliseconds
+    #
+    my $MS = get_ms($fields[$WACTIVE_STIME_HHMMSS], $fields[$WACTIVE_STIME_MS]);
+
+    my $lastMS = 0;     # previously seen MS
+    my $lapMS = 0;      # laptime MS
+    my $groupMS = 0;    # time from beginning of this group
+
+    if (defined $LastSeen{$tagid}) {
+
+        $lastMS =  $LastSeen{$tagid};
+        $lapMS = $MS - $lastMS;
+        $LastSeen{$tagid} = $MS;
+        $LapNumber{$tagid}++;
+
+        #$CountedLaps{join("-", $tagid, $filedate)}++;
+        $CountedLaps{$tagid}++;
+        $TotalCountedLaps{$filedate}++;
+        if ($fields[$WACTIVE_CORR]) {
+            $Corrections{$tagid} += hex($fields[$WACTIVE_CORR]);
+        }
+
+        if (defined($BatteryFlag{$tagid})) {
+            $BatteryFlag{$tagid} &= $fields[$WACTIVE_BATT];
+        }
+        else {
+            $BatteryFlag{$tagid} = $fields[$WACTIVE_BATT];
+        }
+
+        # XXX mintime needs some work for track, it is possible to get a valid lap from two swipes to test
+        # XXX if they are too close together, resulting in a very high speed lap equivalent, e.g. 65kph
+        # see lapd-BVCTrack Oct 26, t025EB2 10.92 at about 19:55
+        #
+        #
+        if ($distance eq ".2") {
+            if ($lapMS > (4*$maxtime)) {
+                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO SLOW > %4.1f\n", 
+                       $timestamp, $tagid, $MS/1000, $lastMS/1000, $lapMS/1000, $maxtime/1000;
+                $lastMS = 0;
+                $lapMS = 0;
+                $LapNumber{$tagid} = 0;
+            }
+            elsif ($lapMS > ($maxtime)) {
+                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO SLOW > %4.1f POSSIBLY MISSING LAPS\n", 
+                       $timestamp, $tagid, $MS/1000, $lastMS/1000, $lapMS/1000, $maxtime/1000;
+                #$MissingLaps{join("-", $tagid, $filedate)}++;
+                $MissingLaps{$tagid}++;
+                $TotalMissingLaps{$filedate}++;
+                $skippedflag++;
+            }
+            elsif ($lapMS < $mintime) {
+                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO FAST < %4.1f\n", 
+                       $timestamp, $tagid, $MS/1000, $lastMS/1000, $lapMS/1000, $mintime/1000;
+                $lastMS = 0;
+                $lapMS = 0;
+                $LapNumber{$tagid} = 0;
+            }
+            else {
+                #printf STDERR "%s %s: MS: %4.1f - %4.1f %4.1f\n", $timestamp, $tagid, $MS, $lastMS, $lapMS;
+            }
+        }
+        else {
+            if ($lapMS > $maxtime) {
+                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO SLOW > %4.1f\n", $timestamp, $tagid, $MS, $lastMS, $lapMS, $maxtime;
+                $lastMS = 0;
+                $lapMS = 0;
+                $LapNumber{$tagid} = 0;
+            }
+            elsif ($lapMS < $mintime) {
+                printf STDERR "%s %s: MS: %4.1f - %4.1fd  = %4.1f TOO FAST < %4.1f\n", $timestamp, $tagid, $MS, $lastMS, $lapMS, $mintime;
+                $lastMS = 0;
+                $lapMS = 0;
+                $LapNumber{$tagid} = 0;
+            }
+            else {
+                #printf STDERR "%s %s: MS: %4.1f - %4.1f %4.1f\n", $timestamp, $tagid, $MS, $lastMS, $lapMS;
+            }
+        }
+
+        #if ($distance eq ".2") {
+        #    if (($lapMS < 15000) && ($LapNumber{$tagid} == 1)) {
+        #        printf STDERR "%s %s: MS: %d - %dd  = %d TOO FAST < %d\n", $timestamp, $tagid, $MS, $lastMS, $lapMS, $mintime;
+        #        $lastMS = 0;
+        #        $lapMS = 0;
+        #        $LapNumber{$tagid} = 0;
+        #    }
+        #}
+    }
+    else {
+        #printf STDERR "%s %s: MS: %d FIRST\n", $timestamp, $tagid, $MS;
+        $lastMS = 0;
+        $lapMS = 0;
+        $LastSeen{$tagid} = $MS;
+        $LapNumber{$tagid} = 0;
+    }
+
+    my $lapNumber = $LapNumber{$tagid};
+
+    # Get the elapsed time from the beginning of this group
+    #
+    # If there is no current group start time then use this as the start of one
+    #
+    my $gapms = 0;
+    unless ($GroupStartMS) {
+        #printf STDERR "%s: GroupStartMS: ZERO %d\n", $tagid, $groupMS;
+        $GroupStartMS = $MS;
+        $GroupLastMS = $MS;
+        $groupMS = 0;
+        $GroupNumber = 0;
+    }
+    # 
+    # if the time from the last recorded time in the group exceeds the gaptime then reset
+    #
+    else {
+        $gapms = $MS - $GroupLastMS;
+
+        if ($gapms > $gaptime) {
+            #printf STDERR "%s: GroupStartMS: %d %d too large > %d\n", $tagid, $GroupStartMS, $MS, $gaptime;
+
+            if ($gapms > $maxtime) {
+                $gapms = 0;
+            }
+            $GroupStartMS = $MS;
+            $GroupLastMS = $MS;
+            $groupMS = 0;
+            $GroupNumber = 0;
+        }
+        #
+        # within the gaptime so compute the groupMS and save the last group time
+        #
+        else {
+            $groupMS = $MS - $GroupStartMS;
+            $GroupLastMS = $MS;
+            $GroupNumber++;
+            $gapms = 0;
+            #printf STDERR "%s: GroupStartMS: %d %d < gap: %d\n", $tagid, $GroupStartMS, $MS, $groupMS;
+        }
+    }
+
+
+    # 
+    # dump the data fields
+    #
+    print_csv_str($timestamp, 0);               # 0
+    print_csv_str($venuename, 0);               # 1
+    print_csv_str($fields[$WACTIVE_BOX], 0);    # 2 box id
+    print_csv_str($fields[$WACTIVE_EVENT], 0);  # 3 BOX
+    print_csv_str($fields[$WACTIVE_RX], 0);     # 4 RX
+    print_csv_str($tagid, 0);                   # 5 tag id
+    print_csv_str($fields[$WACTIVE_BATT], 0);   # 6 BATT
+    print_csv_str($fields[$WACTIVE_CORR], 0);   # 7 CORR
+    print_csv_str($MS, 0);                      # 8 time lap finished
+    print_csv_str($lastMS, 0);                  # 9 time lap started (if available)
+    print_csv_str($groupMS, 0);                 # 10group time (from beginning of group lap)
+    print_csv_str($lapMS, 0);                   # 11 lap time (if start time available)
+    print_csv_str($lapNumber, 0);               # 12 Lap number for consecutive laps 
+    print_csv_str($GroupNumber, 0);             # 13 Group number for group entry
+    print_csv_str($gapms, 0);                   # 14 Group number for group entry
+    print_csv_str($skippedflag, 1);             # 15 Skipped Lap flag
+
+}
+
+# ################################################################################################################### #
+
+my $RestartFlag = 0;
+
+sub dist2ms {
+    my ($distance, $speed) = @_;
+
+    return ($distance / $speed) *60 * 60 * 1000;
+}
+
+sub do_fileio {
+
+    my ($csv, $venuename) = @_;
+
+    my $Venue_ref = get_venue_info($venuename);
+
+    my $organizer = "";
+    my $distance = 0;
+    my $minspeed = 0;
+    my $maxspeed = 0;
+    my $mintime = 0;
+    my $maxtime = 0;
+    my $gaptime = 0;
+    my $tz = "";
+    if ($Venue_ref) {
+        $organizer = $Venue_ref->{'organizer'};
+        $distance = $Venue_ref->{'distance'};
+        $minspeed = $Venue_ref->{'minspeed'};
+        $maxspeed = $Venue_ref->{'maxspeed'};
+        $tz = $Venue_ref->{'tz'};
+        $gaptime = $Venue_ref->{'gaptime'} * 1000;
+        $mintime = dist2ms($distance, $maxspeed);
+        $maxtime = dist2ms($distance, $minspeed);
+    }
+
+    #open(FOUT, ">&STDOUT");
+    my $count = 0;
+    while (<STDIN>) {
+        my $firstflag = $count == 0;
+        process($csv, $_, $count++, $organizer, $distance, $mintime, $maxtime, $gaptime, $venuename, $tz);
+        last if ($RestartFlag);
+    }
+
+}
+
+sub do_io {
+
+    my ($csv, $skt) = @_;
+
+    my $venuename = get_active_venue();
+    my $Venue = get_venue_info($VenueName);
+    my $Venue_ref = get_venue_info($venuename);
+
+    my $organizer = "";
+    my $distance = 0;
+    my $minspeed = 0;
+    my $maxspeed = 0;
+    my $mintime = 0;
+    my $maxtime = 0;
+    my $gaptime = 0;
+    my $tz = "";
+    if ($Venue_ref) {
+        $organizer = $Venue_ref->{'organizer'};
+        $distance = $Venue_ref->{'distance'};
+        $minspeed = $Venue_ref->{'minspeed'};
+        $maxspeed = $Venue_ref->{'maxspeed'};
+        $tz = $Venue_ref->{'tz'};
+        $gaptime = $Venue_ref->{'gaptime'} * 1000;
+        $mintime = dist2ms($distance, $maxspeed);
+        $maxtime = dist2ms($distance, $minspeed);
+    }
+
+    $RestartFlag = 0;
+    my $count = 0;
+    while (<$skt>) {
+        process($csv, $_, $count++, $organizer, $distance, $mintime, $maxtime, $gaptime, $venuename, $tz);
+        last if ($RestartFlag);
+    }
+
+    $FoutFilename = "";
+    close(FOUT);
+
+    my $loginfo = sprintf("Socket closed: %s %s %d", $IPAddress, $Port, $RestartFlag);
+    syslog('warning', $loginfo);
+
+}
+
+# ################################################################################################################### #
+
+my $skt;
+
+sub sighandler {
+    my ($sig) = @_;
+    if ($ServerMode) {
+        my $loginfo = sprintf("caught signal: %s", $sig);
+        syslog('warning', $loginfo);
+    }
+
+    printf STDERR "Caught signal: %s\n", $sig;
+
+    if ($sig eq "HUP") {
+        $skt->shutdown();
+        $RestartFlag = 1;
+        die;
+    }
+    if ($sig eq "INT") {
+        exit();
+    }
+}
+
+sub percent {
+
+    my ($count, $total) = @_;
+    return 0 unless(defined($count));
+    return 0 unless(defined($total));
+    return 0 unless($total);
+    return ($count / $total) * 100;
+}
+
+sub dodef {
+    my ($val) = @_;
+    return 0 unless(defined($val));
+    return $val;
+}
+
+# ################################################################################################################### #
+
+# open log
+openlog($0, "ndelay,pid", "daemon");
+
+# venue
+# servermode = 0
+if ($#ARGV == 0) {
+    $ServerMode = 0;
+    $VenueName = $ARGV[0];
+    shift @ARGV || die usage;
+}
+elsif ($#ARGV == 1) {
+    $ServerMode = 0;
+    $VenueName = $ARGV[0];
+    shift @ARGV || die usage;
+    my $dir = $ARGV[0];
+    shift @ARGV || die usage;
+    mkdir ($dir);
+    chdir ($dir) || die "Cannot chdir to $dir\n";
+}
+#
+# ipaddress port [dir]
+# servermode = 1
+else {
+    $ServerMode = 1;
+    $IPAddress = $ARGV[0];
+    shift @ARGV || die usage;
+    $Port = $ARGV[0];
+    shift @ARGV || die usage;
+    if ($#ARGV == 0) {
+        my $dir = $ARGV[0];
+        mkdir ($dir);
+        chdir ($dir) || die "Cannot chdir to $dir\n";
+        my $loginfo = sprintf("wtactive started: %s %s %s %s", $VenueName, $IPAddress, $Port, $dir);
+        syslog('warning', $loginfo);
+        #printf STDERR "Chdir %s\n", $dir;
+    }
+    else {
+        my $loginfo = sprintf("wtactive started: %s %s %s", $VenueName, $IPAddress, $Port);
+        syslog('warning', $loginfo);
+
+    }
+}
+
+
+
+my $socketcount = 0;
+my $Directory = "/var/racereplay";
+
+$dbh = DBI->connect("dbi:CSV:f_dir=$Directory;csv_eol=\n;");
+$dbh->{'AutoCommit'} = 1;       # CSV does not support transactions
+$dbh->{'RaiseError'} = 1;
+$dbh->{'csv_tables' }->{'organizers'} = {'file' => 'organizers.csv'};
+$dbh->{'csv_tables' }->{'venues'} = {'file' => 'venues.csv'};
+$dbh->{'csv_tables' }->{'users'} = {'file' => 'users.csv'};
+
+my $csv = Text::CSV->new({ binary=> 1, eol => $/ });
+
+
+# FileMode
+# Just process a single file and exit
+#
+unless ($ServerMode) {
+    do_fileio($csv, $VenueName);
+
+    printf STDERR "\nCorrections and Missing laps report - by tag\n";
+
+
+    #print Dumper(%Corrections);
+
+    printf STDERR "%10s  %12s %12s %8s %8s %8s %s\n", "TagID", "Corrections", "Missing", "Total", "%", "%", "BatteryFlag";
+    foreach my $key (sort keys(%Corrections)) {
+        next unless($CountedLaps{$key} > 2);
+        printf STDERR "%10s  %12d   %12d  %8d %6.1f %6.1f  %s\n", $key, 
+               dodef($Corrections{$key}), 
+               dodef($MissingLaps{$key}), 
+               dodef($CountedLaps{$key}),
+               percent($Corrections{$key}, $CountedLaps{$key}), 
+               percent($MissingLaps{$key}, $CountedLaps{$key}),
+               dodef($BatteryFlag{$key}) ? "Good" : "Bad";
+    }
+    printf STDERR "\nMissing Laps report - by date\n";
+    foreach my $key (sort keys(%TotalMissingLaps)) {
+        next unless($TotalCountedLaps{$key} > 100);
+        printf STDERR "%10s %6.1f %8d %8d\n", $key, 
+               ($TotalMissingLaps{$key} / $TotalCountedLaps{$key}) * 100,
+               $TotalMissingLaps{$key}, $TotalCountedLaps{$key};
+    }
+    exit;
+}
+
+#
+# Server Mode - Repeat forever....
+#
+# 1. Open a socket to connect to server.
+# 2. Set socket options to enable TCP KEEPALIVE
+# 3. Process until socket closes.
+# 4. sleep
+#
+while(1) {
+
+    # connect to server
+    #
+    $skt = IO::Socket::INET->new(
+            'PeerAddr' => $IPAddress, 
+            'PeerPort' => $Port, 
+            'Proto' => 'tcp');
+
+    # did we get a connection?
+    #
+    unless (defined($skt)) {
+        my $loginfo = sprintf("Socket not created: %s %s", $IPAddress, $Port);
+        syslog('warning', $loginfo);
+        #printf STDERR "Socket not created! %s %s\n", $IPAddress, $Port;
+        sleep(5);
+        next;
+    }
+
+    my $loginfo = sprintf("Socket open: %s %s", $IPAddress, $Port);
+    syslog('warning', $loginfo);
+
+    # Set socket options to ensure we get TCP KEEPALIVE enabled
+    # N.B. these are linux specific options
+    #
+    my $ierr = setsockopt($skt, SOL_SOCKET, SO_KEEPALIVE, 1);
+    unless ($ierr) {
+        printf STDERR "setsockopt SOL_KEEPALIVE: %d\n", $ierr;
+    }
+    #setsockopt($skt, IPPROTO_TCP, TCP_NODELAY, 1);
+    setsockopt($skt, SOL_SOCKET, SO_LINGER, 0);
+    setsockopt($skt, IPPROTO_TCP, TCP_KEEPIDLE, 10);
+    setsockopt($skt, IPPROTO_TCP, TCP_KEEPINTVL, 5);
+    setsockopt($skt, IPPROTO_TCP, TCP_KEEPCNT, 5);
+
+
+    # use an eval so that we can use die
+    # in signal handler to close socket in pending read.
+    #
+    eval {
+        $SIG{ 'INT' } = 'sighandler';
+        $SIG{ 'HUP' } = 'sighandler';
+
+        # process data on this socket
+        #
+        do_io($csv, $skt);
+    };
+
+    # short delay to prevent runaway connection attempts
+    #
+    sleep(5);
+}
+

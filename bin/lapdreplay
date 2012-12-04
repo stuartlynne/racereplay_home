@@ -1,0 +1,188 @@
+#!/usr/bin/perl 
+
+use strict;
+use warnings;
+use Text::CSV;
+use Getopt::Std;
+use Switch;
+use Scalar::Util qw(looks_like_number);
+#use Spreadsheet::WriteExcel;
+use Date::Simple('date','today');
+use DateTime;
+use DateTime::TimeZone;
+use DateTime::Locale;
+use DateTime::Format::Strptime;
+
+use Data::Dumper;
+use IO::File;
+use IO::Select;
+
+
+
+sub print_csv_str {
+    my ($cell, $last) = @_;
+    unless(defined($cell)) { $cell = ""; }
+    printf FOUT "\"%s\"", $cell;
+    if ($last) { 
+        printf FOUT "\n"; 
+        FOUT->flush;
+    }
+    else { printf FOUT ","; }
+}
+
+sub newdatestamp {
+
+    my $tz = "PST8PDT";
+
+    my $today = DateTime->today();
+    my $now = DateTime->now();
+
+    #printf STDERR "today: %s\n", $today;
+    printf STDERR " %s\n", $now;
+
+    $now =~ s/T/ /;
+
+    my $date_format = DateTime::Format::Strptime->new( pattern => '%F %T', time_zone => "GMT");
+
+    my $dt = $date_format->parse_datetime($now) || die $DateTime::Format::Strptime::errmsg;
+
+    $dt->set_time_zone($tz);
+    my $timestamp = $dt->strftime("%Y%m%d-%H%M");
+
+    #printf STDERR "timestamp: %s\n", $timestamp;
+    return $timestamp;
+
+}
+
+
+
+my $CurrentFileDate = "";
+my $FoutFilename = "";
+
+sub openfout {
+
+    my $datestamp = newdatestamp();
+
+
+    return 0 if ($datestamp eq $CurrentFileDate);
+    $CurrentFileDate = $datestamp;
+
+    if ($FoutFilename ne "") {
+        printf STDERR "CLOSING %s\n", $FoutFilename;
+        close FOUT;
+        $FoutFilename = "";
+    }
+
+    my $firstflag = 0;
+    my $filename = sprintf("lapd-BVCTrack-%s.csv", $datestamp);
+    $FoutFilename = $filename;
+
+    printf STDERR "OPENING %s\n", $FoutFilename;
+
+    $filename = sprintf(">%s", $filename);
+    open (FOUT, $filename) || die "Cannot open $filename\n";
+
+    return 1;
+}
+
+
+$| = 1;
+
+
+my $directory = "";
+if ($#ARGV >= 0) {
+        $directory = $ARGV[0];
+        shift @ARGV;
+        mkdir ($directory);
+        chdir ($directory) || die "Could not create $directory";;
+
+}
+
+my $scale = 10;
+if ($#ARGV >= 0) {
+        $scale = $ARGV[0];
+        shift @ARGV;
+}
+
+
+
+
+# LAPD Code
+#
+my $LAPD_DATE=0;
+
+# Results array codes
+
+
+my $csv = Text::CSV->new({ binary=> 1, eol => $/ });
+
+my $lastMS = 0;
+
+my $count = 0;
+
+my $firstflag = 1;
+my $titles;
+
+my $today = today();
+
+while (<>) {
+
+    printf STDERR "%s", $_;
+
+    chop($_);
+
+
+    if ($firstflag) {
+        $firstflag = 0;
+        $titles = $_;
+        next;
+    }
+
+    my $status = $csv->parse($_);
+    my @fields = $csv->fields();
+    
+    if ($#fields == 0) {
+        next;
+    }
+
+    if (openfout()) {
+        printf FOUT "%s\n", $titles;
+    }
+
+
+    my $datestamp = $fields[$LAPD_DATE];
+    my @datevalues = split(/ /, $datestamp);;
+
+
+    my $xtime = $datevalues[1];
+
+    my @values = split(/:/, $xtime);
+
+
+    my $newdatestamp = sprintf("%s %s", $today, $datevalues[1]);
+
+
+    my $MS = ($values[0] * 60*60 + $values[1] * 60 + $values[2] ) * 1000;
+
+    print_csv_str($newdatestamp, 0);
+
+    for (my $i = 1; $i <= $#fields; $i++) {
+        print_csv_str($fields[$i], $i == $#fields);
+    }
+
+    if ($lastMS) {
+
+        my $timeout = ($MS -$lastMS) / 1000 / $scale;
+        while ($timeout > 5) {
+            $timeout = $timeout / 10;
+        }
+
+        if ($timeout > 0) {
+            printf STDERR "[%4.1f]", $timeout;
+            select(undef, undef, undef, $timeout);
+        }
+    }
+    $lastMS = $MS;
+
+
+}

@@ -1,0 +1,808 @@
+#!/usr/bin/perl
+
+#
+# lapimport
+#
+# This script will import CSV Lapd data into the RaceReplay database.
+#
+# The lapd data consists of timing data that has been pre-processed to create
+# lap records that additionally have per lap information for the user and 
+# group information for the group that the user was with when the activation
+# record was recorded.
+#
+# The CSV file is opened via DBI::CSV and for each row. 
+#
+# For reach activation record (possibly a lap record at this point) the following tables may be
+# used or updated:
+#
+#       racereplay.venues
+#               - if required, create a venue record for where the data was recorded
+#               - typically all records for a single file will be for the same venue
+#               - typically all venues should already exist
+#
+#       racereplay.chips
+#               - if required, create a chip record for the transponder chip used
+#               - this allows unknown transponders to be safely used without prior knowledge
+#
+#       racereplay.health
+#               - create a health record when required
+#
+#       racereplay.groupsets
+#               - create a groupset record when required
+#
+#       racereplay.lapsets
+#               - create a lapset record when required
+#
+#
+#       racereplay.laps
+#               - create a lap record
+#               - set fields as needed
+#
+#               - update lapset finishtime, totalms, bestlapms and laps 
+#               - update groupset lengthms, gapms and members
+#               - update health activation count, battery flag, skipped count, and corrections 
+#               - update chip activations, replacebattery, batteryreplaced 
+#
+# 
+#
+# This script can run in two modes:
+#
+#       - run against a list of files
+#       - Follow Me Mode
+#
+# File list usage:
+#
+#       cd $DIRECTORY
+#       lapimport FILES [....]
+#
+# Follow Me Mode usage:
+#       
+#       cd $DIRECTORY
+#       lapimport
+#
+# The Follow Me Mode is designed to run as a long running service. Typically it will be started
+# from an init.d startup script.
+#
+# It will respond to signals:
+#
+#       TERM - terminate
+#       QUIT - terminate
+#       HUP - terminate
+#       INT - restart
+#
+#
+
+# Current fields expected in the incoming CSV file:
+#
+#       "datestamp"     Time and date stamp when recorded. 
+#       "venue"         Where recorded.
+#       "boxid"         Timing unit identifier.
+#       "eventid"       Event id from timing unit.
+#       "rx"            RX Number from timing unit.
+#       "tagid"         Transponder TAG identifier.
+#       "batt"          Batter OK flag.
+#       "corr"          The number of times the transponder transmitted before being recognized.
+#       "finishms"      Milli-seconds at the end of the lap.
+#       "startms"       Milli-seconds at the beginning of the lap (if present, may be zero).
+#       "groupms"       Milli-seconds from beginning of group.
+#       "lapms"         Total milli-seconds for recorded lap (may be zero).
+#       "lapnumber"     Lap number withing a set of laps.
+#       "groupnumber"   Number withing a group.
+#       "gapms"         Milli-seconds from previous group if first in group.
+#       "skippedflag"   Number of possible skipped laps.
+#
+
+
+
+
+my $DEBUG = 1;
+my $VERBOSE = 1;
+
+
+use strict;
+use warnings;
+use Time::CTime;
+use DBI;
+use Data::Dumper;
+use SQL::Abstract;
+use File::Tail;
+use DateTime;
+use DateTime::TimeZone;
+use DateTime::Locale;
+use DateTime::Format::Strptime;
+use Sys::Syslog qw (:standard :macros);
+use Cwd;
+
+
+#my $DATABASE = "racetest";
+#my $DBUSER = "racetest";
+#my $DATABASE = $dir;
+#my $DBUSER = $dir;
+#my $DBPASSWORD = "aa.bb.cc";
+
+
+
+BEGIN {
+    my $dir = fastcwd;
+    my @values = split(/\//, $dir);
+    push (@INC, sprintf("/%s/%s/%s/bin", $values[1], $values[2], $values[3]));
+    #printf STDERR "INC: %s\n", join(";", @INC); 
+}
+
+use My::SqlDef qw(SqlConfig);
+use My::SimpleCSV qw(init parse);
+use My::FKey qw(init find finish);
+use My::Misc qw(find_chipid);
+
+my ($DATABASE, $DBUSER, $DBPASSWORD) = SqlDef::SqlConfig();
+
+printf STDERR "%s %s %s\n", $DATABASE, $DBUSER, $DBPASSWORD;
+
+sub dodef {
+    my ($ref) = @_;
+    return $ref if (defined($ref));
+    return "";
+}
+sub dodef0 {
+    my ($ref) = @_;
+    return $ref if (defined($ref));
+    return 0;
+}
+
+my ($sGroupsetSth, $iGroupsetSth, $uGroupsetSth, $uLapsetChipSth);
+my ($sLapsetSth, $iLapsetSth);
+my $iLapSth;
+
+my (%Health, %Venues, %LapTime, %Lapms, %Laps, %Activations, 
+        %LapSetid, %LapTotalms, %LapBestms, %LapCorrections, %LapSkippedCount, %LapBattery);
+
+my %UKey;
+
+my $GroupDatestamp = "";
+my $GroupMembers = 0;
+my $GroupMS = 0;
+my $GroupLengthMS = 0;
+my $GroupSetid = 0;
+my $GroupGapMS = 0;
+
+######################################################################################################################
+
+
+# get_venueid
+#
+# get or create a venueid
+#
+sub get_venueid {
+    my ($venue) = @_;
+    if (defined($Venues{$venue})) {
+        return $Venues{$venue};
+    }
+    my $venueid = FKey::find($venue, %UKey);
+    $Venues{$venue} = $venueid;
+    printf STDERR "found venue: %s venueid: %d\n", $venue, $venueid;
+    return $venueid;
+}
+
+# get_healthid
+#
+# get or create a healthid
+#
+sub get_healthid {
+    my ($dbsql, $tagid, $chipid, $datestamp) = @_;
+
+    my @values = split(/ /,$datestamp);
+    my $date = $values[0];
+
+    # cached value
+    return $Health{$tagid} if(defined($Health{$tagid}));
+
+    $Health{$tagid} = Misc::find_healthid($dbsql, $chipid, $date);
+    return $Health{$tagid};
+    
+
+#   # search for it
+#   my $cSth = $dbsql->prepare( "SELECT healthid FROM health WHERE chipid=? AND datestamp=?");
+#   $cSth->execute($chipid, $date) || die "Select from health failed\n";
+#   my $srow = $cSth->fetchrow_hashref();
+
+#   # found it
+#   if (defined($srow)) {
+#       my $healthid = $srow->{'healthid'};
+#       $Health{$tagid} = $healthid;
+#       return $healthid;
+#   }
+
+#   # insert it
+#   printf STDERR "INSERT INTO health (chipid,datestamp,activations,corrections,skippedcount,battery) VALUES(%s,%s,0,0,0,0)\n", $chipid, $date;
+
+#   my $iSth = $dbsql->prepare("INSERT INTO health (chipid,datestamp,activations,corrections,skippedcount,battery) VALUES(?,?,0,0,0,0)");
+#   $iSth->execute($chipid, $date) || die "Failed to insert chipid\n";
+
+#   # now find it
+#   $cSth->execute($chipid, $date) || die "Insert into health failed\n";
+#   $srow = $cSth->fetchrow_hashref();
+#   
+#   unless (defined($srow)) { die "Cannot find health!\n"; }
+
+#   # cache it
+#   my $healthid = $srow->{'heal'};
+#   $Health{$tagid} = $healthid;
+#   return $healthid;
+}
+
+
+######################################################################################################################
+
+# update_lapset
+#
+# At the end of a lapset this is called to update lapset information. Note that this also updates
+# the chips and health records for the # appropriate chipid.
+#
+sub update_lapset {
+
+    my ($dbsql, $tagid, $chipid) = @_;
+
+    my $battery = $LapBattery{$tagid};
+    my $laps = $Laps{$tagid};
+    my $activations = $Activations{$tagid};
+
+    # The replacebattery flag is set if we have a significant number of missed BATT OK
+    # flags (less than 90%) and a reasonable sample size (> 20)
+    #
+    my $replacebattery = 0;
+    if ($activations) {
+        $replacebattery = 1 if (($activations > 20) && ($battery / $activations) < .9);
+    }
+
+    printf STDERR "UPDATE lapsets l LEFT JOIN chips c ON l.chipid = c.chipid LEFT JOIN health h ON c.chipid = h.chipid SET 
+                l.finishtime=%s, l.laps=%s, l.totalms=%s, l.bestlapms=%s, 
+                c.currentactivations=c.currentactivations+%s, c.totalactivations=c.totalactivations+%s, c.replacebattery=c.replacebattery OR %d,
+                h.activations=h.activations+%s, h.corrections=h.corrections+%s, h.battery=h.battery+%s, h.skippedcount=h.skippedcount+%s
+                WHERE l.lapsetid=%s AND c.chipid=%s AND h.healthid=%s\n",
+
+                $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, 
+                $laps, $laps, $replacebattery, 
+                $activations, $LapCorrections{$tagid}, $battery, $LapSkippedCount{$tagid}, 
+                $LapSetid{$tagid}, $chipid, $Health{$tagid}
+    if ($DEBUG);
+
+    $uLapsetChipSth->execute(
+                $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, 
+                $laps, $laps, $replacebattery, 
+                $activations, $LapCorrections{$tagid}, $battery, $LapSkippedCount{$tagid}, 
+                $LapSetid{$tagid}, $chipid, $Health{$tagid}
+           ) || die "Could not insert laps\n";
+    
+    $uLapsetChipSth->finish();
+
+    # undef everything
+    delete $LapSetid{$tagid};
+    delete $LapTime{$tagid};
+    delete $Laps{$tagid};
+    delete $Lapms{$tagid};
+    delete $LapTotalms{$tagid};
+    delete $LapBestms{$tagid};
+    delete $LapCorrections{$tagid};
+    delete $LapSkippedCount{$tagid};
+    delete $LapBattery{$tagid};
+    delete $Activations{$tagid};
+    delete $Health{$tagid};
+}
+
+# update groupset
+#
+# At the end of a set of activations in a single group this is called to update the groupset 
+# record with the appropriate information.
+#
+sub update_groupset {
+
+    unless ($GroupMembers == 1) {
+        printf STDERR "UPDATE groupsets SET datestamp=%s members=%s lengthms=%s WHERE groupsetid=%s\n",
+               $GroupDatestamp, $GroupMembers, $GroupLengthMS, $GroupSetid if ($DEBUG);
+
+        $uGroupsetSth->execute($GroupDatestamp, $GroupMembers, $GroupLengthMS, $GroupSetid) || die "Could not insert groupsets\n";
+    }
+
+    $GroupDatestamp = "";
+    $GroupMembers = 0;
+    $GroupLengthMS = 0;
+    $GroupSetid = 0;
+}
+
+# insert_groupset
+#
+# Create a new groupset record properly initialized.
+#
+sub insert_groupset {
+    my ($venueid, $datestamp, $finishms, $gapms) = @_;
+
+    printf STDERR "INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(%s,%s,1,0,%s)\n", $venueid, $datestamp, $gapms if ($DEBUG);
+
+    unless ($iGroupsetSth->execute($venueid, $datestamp, 1, 0, $gapms)) {
+        printf STDERR "%s - groupsets\n", $iGroupsetSth->errstr if ($VERBOSE);
+    }
+
+    # get groupsetid
+    #
+    printf STDERR "SELECT groupsetid FROM groupsets WHERE venueid=%s AND datestamp=%s\n", $venueid, $datestamp if ($DEBUG);
+
+    $sGroupsetSth->execute($venueid, $datestamp) || die "insert_groupset: Cannot find groupsetid\n";
+    my $srow = $sGroupsetSth->fetchrow_hashref();
+
+    unless (defined($srow)) {
+        die "insert_groupset: Could not find groupsetid\n";
+    }
+
+    # reset the appropriate fields associated with this tagid
+    #
+    $GroupSetid = $srow->{'groupsetid'};
+    $GroupDatestamp = $datestamp;
+    $GroupMembers = 0;
+    $GroupMS = 0;
+    $GroupLengthMS = 0;
+    $GroupGapMS = $finishms;
+
+    #printf STDERR "GroupSetid: %s\n", $GroupSetid if ($DEBUG);
+}
+
+
+# insert_lapset
+#
+# Create a new lapset record properly initialized.
+#
+sub insert_lapset {
+    my ($venueid, $tagid, $chipid, $datestamp, $boxid, $lapms, $startms, $finishms, $groupms) = @_;
+
+    #printf STDERR Dumper(\@_);
+
+    printf STDERR "INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,laps,boxid) VALUES(%s,%s,%s,%s,%s,%s)\n",
+           $venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid if ($DEBUG);
+
+    # may fail if it was previously inserted
+    #
+    unless ($iLapsetSth->execute($venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid)) {
+        printf STDERR "%s - lapsets\n", $iLapsetSth->errstr if ($VERBOSE);
+    }
+
+    # get lapsetid
+    #
+    $sLapsetSth->execute($chipid, $datestamp) || die "Cannot find lapsetid\n";
+
+    my $srow = $sLapsetSth->fetchrow_hashref();
+
+    unless (defined($srow)) {
+        die "Could not find lapsetid\n";
+    }
+
+    # reset the appropriate fields associated with this tagid
+    #
+    $LapSetid{$tagid} = $srow->{'lapsetid'};
+    $Laps{$tagid} = 0;
+    $Activations{$tagid} = 0;
+    $LapBestms{$tagid} = $lapms;
+    $LapCorrections{$tagid} = 0;
+    $LapSkippedCount{$tagid} = 0;
+    $LapBattery{$tagid} = 0;
+
+}
+
+# insert lap data
+#
+# Insert the actual per lap data.
+#
+sub insert_lap {
+
+        my ($tagid, $datestamp, $lapsetid, $laps, $finishms, $startms, $groupms, $lapms, $corr, $skippedflag) = @_;
+
+        printf STDERR "INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,correction,skippedflag) 
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+               $datestamp, $lapsetid,$laps,$finishms,$startms,$groupms,$lapms,$corr,$skippedflag if ($DEBUG);
+
+        unless ($iLapSth->execute($datestamp, $lapsetid, $laps,$finishms,$startms,$groupms,$lapms,$corr,$skippedflag)) {
+            printf STDERR "%s - laps\n", $iLapSth->errstr if ($VERBOSE);
+        }
+}
+
+# do_laps_init
+#
+# initialize global searches
+#
+sub do_laps_init {
+    my ($dbsql) = @_;
+
+    printf STDERR "do_laps_init:\n";
+
+    %UKey = FKey::init($dbsql, 'venue');
+
+    # Prepare all of the SQL statements once, this improves performance
+    #
+    $sGroupsetSth = $dbsql->prepare('SELECT groupsetid FROM groupsets WHERE venueid=? AND datestamp=?');
+    $sLapsetSth =   $dbsql->prepare('SELECT lapsetid FROM lapsets WHERE chipid=? AND starttime=?');
+
+    $iGroupsetSth = $dbsql->prepare('INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(?,?,?,?,?)');
+    $iLapsetSth =   $dbsql->prepare('INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid) VALUES(?,?,?,?,?,?,?,?)');
+    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,correction,skippedflag) 
+                VALUES(?,?,?,?,?,?,?,?,?)');
+
+    $uGroupsetSth = $dbsql->prepare('UPDATE groupsets SET datestamp=?, members=?, lengthms=? WHERE groupsetid=?');
+    $uLapsetChipSth=$dbsql->prepare(
+            'UPDATE lapsets l 
+            LEFT JOIN chips c ON l.chipid = c.chipid 
+            LEFT JOIN health h ON c.chipid = h.chipid
+            SET 
+                l.finishtime=?, l.laps=?, l.totalms=?, l.bestlapms=?, 
+                c.currentactivations=c.currentactivations+?, c.totalactivations=c.totalactivations+?, c.replacebattery=c.replacebattery OR ?,
+                h.activations=h.activations+?, h.corrections=h.corrections+?, h.battery=h.battery+?, h.skippedcount=h.skippedcount+?
+            WHERE 
+                l.lapsetid=? AND c.chipid=? AND h.healthid=?');
+
+
+}
+# do_laps_finish
+#
+# cleanup
+#
+sub do_laps_finish {
+
+    my ($dbsql) = @_;
+
+    # Dump last group record. There is only one.
+    #
+    update_groupset() if ($GroupDatestamp ne "");
+
+    # Update lapset records in progress. There may be many of them.
+    #
+    foreach my $tagid (sort keys(%Lapms)) {
+        my $chipid = Misc::find_chipid($dbsql, $tagid);
+        printf STDERR "tagid: %s\n", $chipid;
+        update_lapset($dbsql, $tagid, $chipid);
+    }
+
+    $sLapsetSth->finish();
+    $iLapsetSth->finish();
+    $iGroupsetSth->finish();
+    $uGroupsetSth->finish();
+    $iLapSth->finish();
+    FKey::finish(%UKey);
+}
+
+
+# These are declared here to improve performance 
+#
+my ($datestamp, $venue, $boxid, $tagid, $finishms, $startms, $groupms, $lapms, $corr, $gapms, $skippedflag, $batteryflag);
+
+# do_lap
+#
+# Process a single row of timing data.
+#
+sub do_lap {
+
+    my ($dbsql, $row) = @_;
+
+    next unless(defined($row));
+
+    # make sure we don't have any undefined values
+    foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
+
+    $datestamp = $row->{'datestamp'};
+    $venue = $row->{'venue'};
+    $boxid = $row->{'boxid'};
+    $tagid = $row->{'tagid'};
+    $finishms = $row->{'finishms'};
+    $startms = $row->{'startms'};
+    $groupms = $row->{'groupms'};
+    $lapms = $row->{'lapms'};
+    $corr = hex($row->{'corr'});
+    $gapms = $row->{'gapms'};
+    $skippedflag = dodef0($row->{'skippedflag'});
+    $batteryflag = dodef0($row->{'batt'});
+
+    printf STDERR "%s: %s startms: %s  groupms: %s Group Datestamp: %s Count: %s MS: %s gapms: %s batteryflag: %d skippedflag: %d\n", 
+           $datestamp, $tagid, $startms, $groupms, $GroupDatestamp, $GroupMembers, $GroupMS, $gapms, $batteryflag, $skippedflag if ($DEBUG);
+
+    unless(defined($tagid)) { die "Bad Chip value"; }
+    unless(defined($venue)) { die "Bad Venue value"; }
+
+    # Find or create a venueid, chipid and healthid
+    #
+    my ($venueid, $maxtime) = get_venueid($venue);
+    my $chipid = Misc::find_chipid($dbsql, $tagid);
+    my $healthid = get_healthid($dbsql, $tagid, $chipid, $datestamp);
+
+    # If this is not a member of the current groupset then update the groupset
+    #
+    update_groupset() if ($GroupDatestamp ne "" && $groupms == 0);
+
+    # Insert a new groupset record if this is a new group.
+    #
+    insert_groupset($venueid, $datestamp, $finishms, $gapms) if ($GroupDatestamp eq "");
+
+    # Update group info
+    #
+    $GroupMembers++;
+    $GroupLengthMS = $groupms;
+
+
+    # Is there an existing lapset for this tag that is not for this workout?
+    # The startms for this record must be the same as the finishms for the most recent record
+    # in the lapset. This also updates the chip and healthid records.
+    #
+    update_lapset($dbsql, $tagid, $chipid) if (defined($Lapms{$tagid}) && ($Lapms{$tagid} ne $startms));
+
+    # Insert a new lapset record if this is a new lapset. 
+    #
+    insert_lapset ($venueid, $tagid, $chipid, $datestamp, $boxid, $lapms, $startms, $finishms, $groupms) unless (defined($Lapms{$tagid}));
+
+    # Update lapset info 
+    #
+    $LapTime{$tagid} = $datestamp;
+    $Lapms{$tagid} = $finishms;
+    $LapBestms{$tagid} = $lapms if (($LapBestms{$tagid} == 0) || ($LapBestms{$tagid} > $lapms));
+
+
+    # Update lap info
+    #
+    $Activations{$tagid}++;
+    $Laps{$tagid}++ if ($startms > 0);
+    $LapTotalms{$tagid} += $lapms;
+    $LapCorrections{$tagid} += $corr;
+    $LapSkippedCount{$tagid} += $skippedflag;
+    $LapBattery{$tagid} += $batteryflag;
+
+    # Finally, insert a new lap record.
+    #
+    insert_lap($tagid, $datestamp, $LapSetid{$tagid}, $Laps{$tagid}, $finishms, $startms, $groupms, $lapms, $corr, $skippedflag);
+
+
+}   
+
+######################################################################################################################
+
+sub file_io_mode {
+
+    my ($dbsql) = @_;
+
+    #my $rcsv = simple_csv_init('test');
+    my $rcsv = SimpleCSV::init('test');
+
+    # iterate across all files specified as arguements
+    #
+    my $firstflag = 1;
+    while (<ARGV>) {
+
+        my $row;
+
+        # initialize prior to each file
+        #
+        if ($firstflag) {
+            $firstflag = 0;
+            do_laps_init($dbsql);
+            #$row = simple_csv_parse($rcsv, $_, 1);
+            $row = SimpleCSV::parse($rcsv, $_, 1);
+            next;
+        }
+
+        # process current line
+        #
+        #$row = simple_csv_parse($rcsv, $_, 0);
+        $row = SimpleCSV::parse($rcsv, $_, 0);
+
+        print STDERR Dumper($row);
+
+        unless (defined($row) && $row != 0) {
+            printf STDERR "Empty row skipped\n";
+            next;
+        }
+
+        do_lap($dbsql, $row);
+
+        # dump at the end of each file
+        #
+        if (eof(ARGV)) {
+            printf STDERR "---------\n";
+            $firstflag = 1;
+            do_laps_finish($dbsql);
+        }
+    }
+    #delete($rcsv);
+    #simple_csv_finish($rcscv);
+
+}
+
+######################################################################################################################
+
+my $RestartFlag = 0;
+my $FinishedFlag = 0;
+my $newfilename = "";
+my $dbsql;
+
+sub sighandler {
+    my ($sig) = @_;
+
+    my $loginfo = sprintf("lapd: caught signal: %s", $sig);
+    syslog('warning', $loginfo);
+
+    printf STDERR "Caught signal: %s\n", $sig;
+
+    if ($sig eq "TERM") {
+        $FinishedFlag = 1;
+    }
+    if ($sig eq "QUIT") {
+        $FinishedFlag = 1;
+    }
+    if ($sig eq "HUP") {
+        $FinishedFlag = 1;
+    }
+    if ($sig eq "INT") {
+        $RestartFlag = 1;
+    }
+}
+
+# newfile
+#
+# Find the most recently modified file in the current directory.
+#
+sub newfile {
+
+    if ($FinishedFlag) {
+
+        # check if we are exiting from a SIGHUP
+        #
+        my $loginfo = sprintf("lapd: terminating", $newfilename);
+        syslog('warning', $loginfo);
+        printf STDERR "%s\n", $loginfo;
+        do_laps_finish($dbsql);
+        exit();
+    }
+
+    opendir(DIR,'.') || die "Cannot open dot directory\n";
+    my @filenames = sort { -M "$a" <=> -M "$b"} readdir(DIR);
+    closedir(DIR);
+
+    for (my $i = 0; $i <= $#filenames; $i++) {
+        my $filename = $filenames[$i];
+        next if ($filename eq '.');
+        next if ($filename eq '..');
+        next unless ($filename =~ /lapd/);
+        printf STDERR "[%2d] %s\n", $i, $filename;
+        $newfilename = $filename;
+        return $filename;
+    }
+    printf STDERR "NO FILE\n";
+    return "-";
+}
+
+
+######################################################################################################################
+# Follow Me Mode.
+#
+# Find the most recently modified file, tail -c +0 -f the file and process all of data.
+#
+# If there is no data for 20 seconds check to see if there is a newer file.
+#
+sub follow_me_mode {
+
+    my ($dbsql) = @_;
+
+
+    $SIG{ 'TERM' } = 'sighandler';
+    $SIG{ 'QUIT' } = 'sighandler';
+    $SIG{ 'INT' } = 'sighandler';
+    $SIG{ 'HUP' } = 'sighandler';
+
+
+
+    # Create a File::Tail object
+    #
+    my $file = File::Tail->new( 
+            name => newfile(), 
+            name_changes => \&newfile, 
+            maxinterval => 5,               # check once a second
+            interval => 1,                  # 
+            adjustafter => 5,               # 
+            resetafter => 10,               # check for new files every 20 seconds
+            tail => -1,                     # return entire file before starting tail mode
+            resettail => -1,                # return entire file before starting tail mode
+            ignore_nonexistant => 1,        # tolerate missing files       
+            debug => 0,
+            );
+
+
+    # wait for input and process
+    #
+    my $line;
+    my $currentfilename = "";
+
+    my $firstflag = 1;
+
+    my $rcsv = SimpleCSV::init('test');
+
+
+    while (defined($line = $file->read())) {
+
+        printf STDERR "\n\n%s", $line;
+
+        my $row;
+
+        printf STDERR "\n\n%s %s FinishedFlag: %d\n", $currentfilename, $newfilename, $FinishedFlag;
+
+
+        # log file open/close operations
+        #
+        if ($currentfilename ne $newfilename) {
+            if ($currentfilename) {
+                my $loginfo = sprintf("lapd: Closing %sd, Opening File: %s", $currentfilename, $newfilename);
+                syslog('warning', $loginfo);
+                printf STDERR "%s\n", $loginfo;
+                do_laps_finish($dbsql);
+            }
+            else {
+                my $loginfo = sprintf("lapd: Opening File: %s", $newfilename);
+                syslog('warning', $loginfo);
+                printf STDERR "%s\n", $loginfo;
+            }
+            $currentfilename = $newfilename;
+            do_laps_init($dbsql);
+            #$row = simple_csv_parse($rcsv, $line, 1);
+            $row = SimpleCSV::parse($rcsv, $line, 1);
+            next;
+        }
+
+
+        # check if we need to restart for SIGINT
+        #
+        if ($RestartFlag) {
+            my $loginfo = sprintf("lapd: restarting", $newfilename);
+            syslog('warning', $loginfo);
+            printf STDERR "%s\n", $loginfo;
+            do_laps_finish($dbsql);
+            #delete($rcscv);
+            #simple_csv_finish($rcscv);
+            do_laps_init($dbsql);
+            #$row = simple_csv_parse($rcsv, $line, 1);
+            $row = SimpleCSV::parse($rcsv, $line, 1);
+            next;
+        }
+
+        # Parse the input line
+        #
+        $row = SimpleCSV::parse($rcsv, $line, 0);
+
+        unless (defined($row) && $row != 0) {
+            printf STDERR "Empty row skipped\n";
+            next;
+        }
+
+        unless ($row->{'datestamp'} ne 'datestamp') {
+            printf STDERR "Skip header\n";
+            next;
+        }
+
+        # Process it
+        #
+        do_lap($dbsql, $row);
+    }
+}
+
+######################################################################################################################
+######################################################################################################################
+
+
+$dbsql = DBI->connect("dbi:mysql:$DATABASE", $DBUSER, $DBPASSWORD, { 'PrintError' => 0 }) || die "Cannot connect to mysql\n";
+
+
+
+# File I/O Mode
+#
+# Process the command arg's as files on STDIN
+#
+if ($#ARGV >= 0) {
+
+    file_io_mode($dbsql);
+    exit();
+}
+
+follow_me_mode($dbsql);
+
+exit();
+
