@@ -41,7 +41,7 @@ BEGIN {
     my $dir = fastcwd;
     my @values = split(/\//, $dir);
     push (@INC, sprintf("/%s/%s/%s/bin", $values[1], $values[2], $values[3]));
-    #printf STDERR "INC: %s\n", join(";", @INC); 
+    printf STDERR "INC: %s\n", join(";", @INC); 
 }
 
 use My::SqlDef qw(SqlConfig);
