@@ -1,0 +1,31 @@
+#! /bin/sh
+### BEGIN INIT INFO
+
+PATH=/usr/local/bin:/sbin:/bin
+
+HOST=192.168.1.100
+PORT=20002
+DIR=/var/racereplay
+
+mkdir -p "${DIR}"
+
+case "$1" in
+  start|"")
+        /usr/local/bin/wtdb "${HOST}" "${PORT}" "${DIR}"
+	;;
+  stop)
+        killall -1 wtdb
+	;;
+  status)
+	;;
+  restart|reload|force-reload)
+        killall -2 wtdb
+	;;
+  *)
+	echo "Usage: wtrc start|stop|restart" >&2
+	exit 3
+	;;
+esac
+
+:
+
