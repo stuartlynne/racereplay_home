@@ -1,0 +1,596 @@
+#!/usr/bin/perl
+
+
+my $DIRECTORY = "./";
+
+use strict;
+use warnings;
+use Text::CSV;
+use Time::CTime;
+use Date::Simple('date','today');
+use DBI;
+use Data::Dumper;
+use SQL::Abstract;
+use Cwd;
+
+
+BEGIN {
+    my $dir = fastcwd;
+    my @values = split(/\//, $dir);
+    push (@INC, sprintf("/%s/%s/%s/bin", $values[1], $values[2], $values[3]));
+    #printf STDERR "INC: %s\n", join(";", @INC); 
+}
+
+use My::SqlDef qw(SqlConfig);
+use My::FKey qw(init find finish);
+use My::Misc qw(find_chipid);
+
+my ($DATABASE, $DBUSER, $DBPASSWORD) = SqlDef::SqlConfig();
+
+printf STDERR "%s %s %s\n", $DATABASE, $DBUSER, $DBPASSWORD;
+
+my $File = "";
+
+my @Titles;
+my $KeyStart = -1;
+my $KeyEnd = -1;
+
+sub print_csv_str {
+    my ($cell, $last) = @_;
+    unless(defined($cell)) { $cell = ""; }
+    printf STDOUT "\"%s\"", $cell;
+    if ($last) { printf STDOUT "\n"; STDOUT->flush; } 
+    else { printf STDOUT ","; }
+}
+
+# do_simple
+# 
+# For simple imports where no foreign keys need to be looked up
+# probably limited to organizers and users tables.
+#
+# N.B. this assumes that the primary key id (organizerid and userid) are NOT
+# present in the source, they will be generated.
+#
+# N.B. this assumes that the secondary key (organizer and lastname/firstname) 
+# are required to be unique. 
+#
+# This version uses SQL::Abstract to build the sql statements and argument arrays.
+#
+sub do_simple{
+        
+    my ($table, $dbcsv, $dbsql) = @_;
+
+    # setup the query for the import CSV table
+    #
+    my $cStmt = sprintf ( "SELECT * FROM  %s", $table);
+    my $cSth = $dbcsv->prepare( $cStmt );
+    $cSth->execute() || die "Execute failed\n";
+
+    # fetch each CSV row and excute the replacement sql with the values
+    #
+    my ($stmt, $iSth);
+    my $sql = SQL::Abstract->new();
+    while (my $row = $cSth->fetchrow_hashref()) {
+        
+        foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
+
+        # first time through we generate and prepare the SQL statement
+        unless (defined($stmt)) {
+            my ($istmt) = $sql->insert($table, $row);
+            my ($ustmt) = $sql->update($table, $row);
+            $ustmt =~ s/.*SET//;    # trim UPDATE table SET from ustmt
+            $stmt = sprintf("%s ON DUPLICATE KEY UPDATE %s", $istmt, $ustmt);
+            $iSth = $dbsql->prepare($stmt);
+            #printf STDERR "stmt: %s\n", $stmt;
+        }
+        my @bind = $sql->values($row);
+        #printf STDERR "Bind: %s\n", join(",", @bind);
+        
+        $iSth->execute(@bind, @bind) || printf STDERR "ERROR: %s\n", $iSth->errstr;
+    }
+    $iSth->finish() if (defined($stmt));
+    $cSth->finish();
+}   
+
+# do_users
+# 
+# For simple imports where no foreign keys need to be looked up
+# probably limited to organizers and users tables.
+#
+# N.B. this assumes that the primary key id (organizerid and userid) are NOT
+# present in the source, they will be generated.
+#
+# N.B. this assumes that the secondary key (organizer and lastname/firstname) 
+# are required to be unique. 
+#
+# This version uses SQL::Abstract to build the sql statements and argument arrays.
+#
+sub do_users {
+        
+    my ($table, $dbcsv, $dbsql) = @_;
+
+    # setup the query for the import CSV table
+    #
+    my $cStmt = sprintf ( "SELECT * FROM  %s", $table);
+    my $cSth = $dbcsv->prepare( $cStmt );
+    $cSth->execute() || die "Execute failed\n";
+
+    # fetch each CSV row and excute the replacement sql with the values
+    #
+    my ($stmt, $iSth);
+    my $sql = SQL::Abstract->new();
+    while (my $row = $cSth->fetchrow_hashref()) {
+        
+        foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
+
+        # change 'privacy' to 'privacyflag'
+        if (defined($row->{'privacy'})) {
+            $row->{'privacyflag'} = $row->{'privacy'};
+            delete $row->{'privacy'};
+        }
+
+        # First time through we generate and prepare the SQL statement, we can do it now 
+        # because we now have associative array with all the correct bits.
+        #
+        unless (defined($stmt)) {
+            my ($istmt) = $sql->insert($table, $row);
+            my ($ustmt) = $sql->update($table, $row);
+            $ustmt =~ s/.*SET//;    # trim UPDATE table SET from ustmt
+            $stmt = sprintf("%s ON DUPLICATE KEY UPDATE %s", $istmt, $ustmt);
+            $iSth = $dbsql->prepare($stmt);
+            #printf STDERR "stmt: %s\n", $stmt;
+        }
+        my @bind = $sql->values($row);
+        
+        $iSth->execute(@bind, @bind) || printf STDERR "ERROR: %s\n", $iSth->errstr;
+    }
+    $iSth->finish() if (defined($stmt));
+    $cSth->finish();
+}   
+
+######################################################################################################################
+
+
+# do_oneforeign
+# 
+# Update the a table where the first CSV field is a foreign key. The name of the table is 
+# the same as the CSV column name with the suffix "s" and the foreign key is the column name with the suffic "id".
+#
+# E.g. for venues:
+#       organizer,venue,description,distance,minspeed,maxspeed,gaptime,tz,activeflag
+#
+# The organizer field needs to be replaced with (SELECT organizerid FROM organizers) WHERE organizer=?)
+#
+#
+sub do_oneforeign{
+
+    my ($key_name, $table, $dbcsv, $dbsql) = @_;
+
+    #printf STDERR "do_oneforeign: key: %s table: %s\n", $key_name, $table;
+
+    # load the table from the CSV file
+    #
+    my $cStmt = sprintf ( "SELECT * FROM  %s", $table);
+    my $cSth = $dbcsv->prepare( $cStmt );
+    $cSth->execute() || die "Execute failed\n";
+
+    my %FKey = FKey::init($dbsql, $key_name);
+    my $keyid_name = $FKey{'keyid'};
+    
+    my $sql = SQL::Abstract->new();
+    my %Keys;
+    my ($iStmt, @iBind, $uStmt, @uBind, $iuStmt, $iuSth);
+
+    while (my $row = $cSth->fetchrow_hashref()) {
+
+        foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
+
+
+        # quick fix for chips table
+        if ($table eq "chips") {
+            $row->{'chip'} = $row->{'tagid'};
+            delete $row->{'tagid'};
+        }
+        # quick fix for events table
+        if ($table eq "venues") {
+            $row->{'timezone'} = $row->{'tz'};
+            delete $row->{'tz'};
+        }
+
+        my $key_val = $row->{$key_name};
+        my $keyid_val;
+
+        # find foreign key, insert a record if it is not present
+        #
+        unless(defined($Keys{$key_val})) {
+            #print STDERR Dumper(%FKey);
+            #printf STDERR "looking for key_val: %s\n", $key_val;
+            $keyid_val = FKey::find($key_val, %FKey);
+            $Keys{$key_val} = $keyid_val;
+            #printf STDERR "%s: %s %s\n", $key_name, $key_val, $Keys{$key_val};
+        }
+        else {
+            $keyid_val = $Keys{$key_val};
+        }
+
+        # remove the key_name from the row associative array and add keyid, 
+        # then build the sql statment and bind variables for an insert.
+        #
+        delete $row->{$key_name};
+        ($uStmt, @uBind) = $sql->update($table, $row);
+
+        $row->{$keyid_name} = $Keys{$key_val};
+        ($iStmt, @iBind) = $sql->insert($table, $row);
+
+        $uStmt =~ s/.*SET//;    # trim UPDATE table SET from ustmt
+        $iuStmt = sprintf("%s ON DUPLICATE KEY UPDATE %s", $iStmt, $uStmt);
+
+        $iuSth = $dbsql->prepare($iuStmt);
+
+        #printf STDERR "iuStmt: %s\n", $iuStmt;
+        #printf STDERR "Bind: %s\n", join(",", (@iBind, @uBind));
+
+        unless ($iuSth->execute(@iBind, @uBind)) {
+                die "Cannot insert or update\n";
+        }
+        $iuSth->finish();
+    }
+
+    $cSth->finish();
+    FKey::finish(%FKey);
+}   
+
+
+######################################################################################################################
+
+# ukey_init - Setup a foreign key search and insert 
+#
+# Give the key name:
+#
+#       table = keys
+#       keyid = keyid
+#
+sub ukey_init {
+    my ($dbsql) = @_;
+    my %ukey;
+
+    $ukey{'sSth'} = $dbsql->prepare("SELECT userid FROM users WHERE firstname=? AND lastname=?");
+    $ukey{'iSth'} = $dbsql->prepare("INSERT INTO users (firstname,lastname) VALUES(?,?)");
+
+    return %ukey;
+}
+
+# ukey_find - find a foreign key, insert if necessary
+#
+sub ukey_find {
+
+    my ($firstname, $lastname, %ukey) = @_;
+
+    #print STDERR Dumper(\%ukey);
+
+    # find foreign key, insert a record if it is not present
+    #
+    #printf STDERR "SELECT\n";
+    my $sSth = $ukey{'sSth'};
+
+    $sSth->execute($firstname, $lastname);
+
+    my $row = $sSth->fetchrow_hashref();
+    unless (defined($row)) {
+
+        #printf STDERR "SELECT FAILED, INSERT\n";
+
+        my $iSth = $ukey{'iSth'};
+        $iSth->execute($firstname, $lastname) || die "Could not insert $firstname, $lastname\n";
+
+        #printf STDERR "RESELECT\n";
+        $sSth->execute($firstname, $lastname) || die "Could not find or insert $firstname, $lastname\n";
+        $row = $sSth->fetchrow_hashref();
+    }
+    unless (defined($row)) {
+        die "Could not find or insert $firstname, $lastname\n";
+    }
+    
+    #print STDERR Dumper($row);
+
+    return $row->{'userid'};
+}
+
+# ukey_finish
+#
+sub ukey_finish {
+    my (%ukey) = @_;
+    my $sSth = $ukey{'sSth'};
+    my $iSth = $ukey{'iSth'};
+    $sSth->finish();
+    $iSth->finish();
+}
+
+
+# do_chiphistory
+# 
+# two foreign keys
+#
+#       chipid - from chip
+#       userid - from firstname and lastname
+#
+#
+sub do_chiphistory{
+
+    my ($file, $dbcsv, $dbsql) = @_;
+
+    my $table = 'chiphistory';
+
+    # load the table from the CSV file
+    #
+    my $cStmt = sprintf ( "SELECT * FROM  %s", $file);
+    my $cSth = $dbcsv->prepare( $cStmt );
+    $cSth->execute() || die "Execute failed\n";
+
+    my %CKey = FKey::init($dbsql, 'chip');
+    my %UKey = ukey_init($dbsql, 'user');
+    my $keyid_name = 'userid';
+    
+    my $sql = SQL::Abstract->new();
+
+    my %CKeys;
+    my %UKeys;
+    my ($iStmt, @iBind, $uStmt, @uBind, $iuStmt, $iuSth);
+
+    while (my $row = $cSth->fetchrow_hashref()) {
+
+        #printf STDERR "\n\n";
+
+        # make sure we don't have any undefined values
+        foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
+        #printf STDERR Dumper($row);
+
+        my $chip_val = $row->{'tagid'};
+        printf STDERR "chip_val: %s\n", $chip_val;
+        my $chipid_val = Misc::find_chipid($dbsql, $chip_val);
+        $row->{'chipid'} = $chipid_val;
+
+        # find user foreign key, insert a record if it is not present
+        #
+        my $firstname = $row->{'firstname'};
+        my $lastname = $row->{'lastname'};
+        unless(defined($firstname) && defined($lastname)) { die "Bad first or last name"; }
+        my $name_val = sprintf("%s,%s", $lastname, $firstname);
+        my $userid_val;
+        unless(defined($UKeys{$name_val})) {
+            #print STDERR Dumper(%UKey);
+            #printf STDERR "looking for name_val: %s\n", $name_val;
+            $userid_val = ukey_find($firstname, $lastname, %UKey);
+            $UKeys{$name_val} = $userid_val;
+            #printf STDERR "user: %s %s\n", $name_val, $UKeys{$name_val};
+        }
+        else {
+            $userid_val = $UKeys{$name_val};
+        }
+        #printf STDERR "userid: %s\n", $userid_val;
+        $row->{'userid'} = $userid_val;
+
+        # ensure that we do not have any existing chip history records
+        # for this chipid that have a null finish time
+        
+        $iuSth = $dbsql->prepare("UPDATE chiphistory SET finishtime = ? WHERE chipid = ? AND finishtime = '0000-00-00 00:00:00'");
+        $iuSth->execute($row->{'finishtime'}, $chipid_val) || die "Update finishtime failed\n";
+
+
+        # use a SET .... ON DUPLICATE KEY UPDATE .... 
+        # This properly updates the correct entry for an existing entry where startime and chipid match
+
+        # remove the key_name from the row associative array and add keyid, 
+        # then build the sql statment and bind variables for an insert.
+        #
+        delete $row->{'tagid'};
+        delete $row->{'firstname'};
+        delete $row->{'lastname'};
+        ($uStmt, @uBind) = $sql->update($table, $row);
+        #delete $row->{'userid'};
+        ($iStmt, @iBind) = $sql->insert($table, $row);
+
+
+        $uStmt =~ s/.*SET//;    # trim UPDATE table SET from ustmt
+        $iuStmt = sprintf("%s ON DUPLICATE KEY UPDATE %s", $iStmt, $uStmt);
+
+        $iuSth = $dbsql->prepare($iuStmt);
+
+        #printf STDERR "iuStmt: %s\n", $iuStmt;
+        #printf STDERR "Bind: %s\n", join(",", (@iBind, @uBind));
+
+        unless ($iuSth->execute(@iBind, @uBind)) {
+                die "Cannot insert or update\n";
+        }
+        $iuSth->finish();
+    }
+
+    $cSth->finish();
+    ukey_finish(%UKey);
+    FKey::finish(%CKey);
+    #dump_sql('chips', $dbsql);
+    #dump_sql('users', $dbsql);
+    #dump_sql($table, $dbsql);
+}   
+
+# do_newbattery
+# 
+sub do_newbattery {
+
+    my ($file, $dbcsv, $dbsql) = @_;
+
+    # load the table from the CSV file
+    #
+    my $cStmt = sprintf ( "SELECT * FROM  %s", $file);
+    my $cSth = $dbcsv->prepare( $cStmt );
+    $cSth->execute() || die "Execute failed\n";
+
+    while (my $row = $cSth->fetchrow_hashref()) {
+
+        printf STDERR "\n\n";
+
+        # make sure we don't have any undefined values
+        foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
+
+        my $datestamp = $row->{'datestamp'};
+        my $shortname = $row->{'shortname'};
+        my $chip = $row->{'chip'};
+
+        next unless (defined($datestamp) && $datestamp ne "");
+
+
+        my $chipid;
+
+        # shortname?
+        if (defined($shortname) && $shortname ne "") {
+            printf STDERR "Shortname: %s %s\n", $shortname, $datestamp;
+            $chipid = Misc::find_loaner($dbsql, $shortname);
+
+            unless(defined($chipid)) {
+                printf STDERR "Cannot find shortname: %s\n", $shortname;
+                next;
+            }
+        }
+        # chip id?
+        elsif (defined($chip) && $chip ne "") {
+            printf STDERR "Chip: %s %s\n", $chip, $datestamp;
+            $chipid = Misc::find_chipid($dbsql, $chip);
+        }
+        else {
+            printf STDERR "Need chip or shortname\n";
+            next;
+        }
+
+        my $healthid = Misc::find_healthid($dbsql, $chipid, $datestamp);
+        printf STDERR "chipid: %s healthid: %s\n", $chipid, $healthid;
+
+        my $iuSth = $dbsql->prepare("
+                UPDATE chips c 
+                JOIN health h ON c.chipid = h.chipid 
+                SET c.currentactivations='0', c.replacebattery='0', c.batteryreplaced=?, h.batteryreplacedflag=1 
+                WHERE c.chipid=? AND h.healthid=?");
+        $iuSth->execute($datestamp, $chipid, $healthid) || printf STDERR "Update newbattery failed %s\n", $iuSth->errstr;
+        $iuSth->finish();
+        next;
+
+    }   
+    $cSth->finish();
+}   
+
+
+######################################################################################################################
+sub dump_sql {
+
+    my ($table, $dbsql) = @_;
+
+    printf STDERR "*********************************\n";
+
+    my $sql = sprintf ( "SELECT * FROM  %s", $table);
+    my $sth = $dbsql->prepare( $sql );
+    $sth->execute() || die "Execute failed\n";
+    my @fields = @{ $sth->{'NAME'} };
+    for (my $i = 0; $i <= $#fields; $i++) {
+        #printf STDERR "[%s] %s\n", $i, $fields[$i];
+        print_csv_str($fields[$i], $i == $#fields);
+    }
+    while (my $row = $sth->fetchrow_hashref()) {
+        #print Dumper($row);
+        for (my $i = 0; $i <= $#fields; $i++) {
+            print_csv_str($row->{$fields[$i]}, $i == $#fields);
+        }
+    }
+    $sth->finish();
+}   
+
+######################################################################################################################
+
+printf STDERR "ARGV: %d\n", $#ARGV;
+
+if ($#ARGV == -1) {
+    printf STDERR "Usage: csv2mysql table\n";
+    exit();
+}
+
+my $table = $ARGV[0];
+
+$table =~ s/.csv//;
+
+my $dbcsv = DBI->connect("dbi:CSV:f_dir=$DIRECTORY;csv_eol=\n;");
+my $dbsql = DBI->connect("dbi:mysql:$DATABASE", $DBUSER, $DBPASSWORD, { 'PrintError' => 0 }) || die "Cannot connect to mysql\n";
+
+my $csvfile = sprintf("%s.csv", $table);
+
+unless (-e $csvfile && -s $csvfile) {
+    printf STDERR "Cannot open %s\n", $csvfile;
+    exit();
+}
+
+printf STDERR "Directory: %s CSV: %s\n", $DIRECTORY, $csvfile;
+
+$dbcsv->{ 'csv_tables' }->{ $table } = { 'file' => $csvfile };
+
+#
+# Simple Table imports
+#
+# organizers
+# users
+#
+if ($table eq "organizers") {
+    do_simple($table, $dbcsv, $dbsql);
+    exit();
+}
+
+if ($table eq "users") {
+    do_users($table, $dbcsv, $dbsql);
+    exit();
+}
+
+#
+# One Foreign Key Tables
+#
+#       venues - organizer
+#       ewvents - venue
+#       chips - organizer
+#
+#
+if ($table eq "venues") {
+    do_oneforeign("organizer", $table, $dbcsv, $dbsql);
+    exit();
+}
+
+if ($table eq "events") {
+    do_oneforeign("venue", $table, $dbcsv, $dbsql);
+    exit();
+}
+
+if ($table eq "chips") {
+    do_oneforeign("organizer",$table, $dbcsv, $dbsql);
+    exit();
+}
+
+
+#
+# Custom Imports
+#
+#       chiphistory - userid from firstname, lastname
+#
+#       lapd
+#               - insert lapd record with lapsetid
+#               - insert lapset record with correct start and finish time and chipid
+#               - add chip record if required
+#
+if ($table eq "tags") {
+    do_chiphistory($table, $dbcsv, $dbsql);
+    exit();
+}
+
+if ($table eq "chiphistory") {
+    do_chiphistory($table, $dbcsv, $dbsql);
+    exit();
+}
+
+if ($table eq "newbattery") {
+    do_newbattery($table, $dbcsv, $dbsql);
+    exit();
+}
+
