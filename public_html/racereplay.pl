@@ -41,7 +41,7 @@ BEGIN {
     my $dir = fastcwd;
     my @values = split(/\//, $dir);
     push (@INC, sprintf("/%s/%s/%s/bin", $values[1], $values[2], $values[3]));
-    #printf STDERR "INC: %s\n", join(";", @INC); 
+    printf STDERR "INC: %s\n", join(";", @INC); 
 }
 
 use My::SqlDef qw(SqlConfig);
@@ -87,7 +87,6 @@ my $CSS = "/css/two-liquid.css";
 sub do_page {
     my ($dbh, $cgi, $Title, $Content_ref, $Aside_ref) = @_;
     return (
-            
             # HTML Header
             $cgi->header, 
 
@@ -99,11 +98,11 @@ sub do_page {
 
                 # header division
                 $cgi->div( { -id => "header", }, 
-                    $cgi->h1(sprintf("Race Replay - %s", $Title)),), "\n",
+                    $cgi->h1(sprintf("Race Replay - %s", $Title)),
+                    ), "\n",
 
                 # content container division
                 $cgi->div ( { -id => 'content-container', }, 
-
                     # contents and aside
                     $cgi->div ( { -id => 'content', }, @{ $Content_ref }), "\n",
                     $cgi->div ( { -id => 'aside', }, @{ $Aside_ref }), "\n",
@@ -817,8 +816,8 @@ sub do_workouts {
     $count = 0;
     while ( my $row = $sth->fetchrow_hashref()) {
 
-        #printf STDERR "**************************************************\n";
-        #printf STDERR Dumper(%Workouts);
+        printf STDERR "**************************************************\n";
+        printf STDERR Dumper(%Workouts);
 
         my $totalms = $row->{'totalms'};
         next unless ($totalms != 0);;
@@ -829,6 +828,12 @@ sub do_workouts {
 
         my $chipid = $row->{'chipid'};
         my $chip = $row->{'chip'};
+
+        unless ($Chips{$chip}) {
+            my $shortname = Misc::get_loaner($dbh, $chipid, $row->{'chip'});
+            $Chips{$chipid} = $shortname;
+        }
+
 
         my $shortname = Misc::get_loaner($dbh, $chipid, $row->{'chip'});
 

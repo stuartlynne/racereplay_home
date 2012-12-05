@@ -1,4 +1,4 @@
-CREATE SCHEMA racetest;
+CREATE SCHEMA racereplay;
 
 CREATE TABLE racereplay.organizers ( 
 	organizerid          INT NOT NULL AUTO_INCREMENT,

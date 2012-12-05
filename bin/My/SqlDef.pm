@@ -4,6 +4,7 @@ package SqlDef;
 
 use strict;
 use Exporter;
+use Cwd;
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK @EXPORT_TAGS);
 
 $VERSION        = 1.00;
@@ -12,9 +13,12 @@ $VERSION        = 1.00;
 
 
 sub SqlDef::SqlConfig {
+    
+    my $dir = fastcwd;
+    my @values = split(/\//, $dir);
 
-    my $DATABASE = "racetest";
-    my $DBUSER = "racetest";
+    my $DATABASE = $values[2];
+    my $DBUSER = $values[2];
     my $DBPASSWORD = "aa.bb.cc";
 
     return ($DATABASE, $DBUSER, $DBPASSWORD);

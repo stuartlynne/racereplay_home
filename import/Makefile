@@ -1,8 +1,8 @@
 
-PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racerplay/bin:"
+PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
 
-DATABASE = "racetest"
-DBUSER = "racetest"
+DATABASE = "racereplay"
+DBUSER = "racereplay"
 DBPASSWORD = "aa.bb.cc"
 
 
@@ -53,7 +53,7 @@ drop: clean
 	@echo "DROP DATABASE ${DATABASE};" | mysql -u root -p
 
 create:
-	cat /home/${DBUSER}/etc/racetest.sql | mysql -u root -p
+	cat /home/${DBUSER}/etc/${DATABASE}.sql | mysql -u root -p
 
 
 clean:
