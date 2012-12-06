@@ -1,0 +1,409 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<project name="RaceTest" database="MySql" >
+	<comment>RaceTest</comment>
+	<schema name="racetest" schemaname="racetest" defo="y" >
+		<table name="chiphistory" >
+			<comment>When a user used a chip.</comment>
+			<column name="chipid" type="INT" length="10" jt="4" mandatory="y" >
+				<comment><![CDATA[key to chip that was used in this period.]]></comment>
+			</column>
+			<column name="userid" type="INT" length="10" jt="4" mandatory="y" >
+				<comment><![CDATA[key for user that used the chip during this period.]]></comment>
+			</column>
+			<column name="starttime" type="TIMESTAMP" jt="93" mandatory="y" >
+				<comment><![CDATA[This record is valid as of this time (required.)]]></comment>
+			</column>
+			<column name="finishtime" type="TIMESTAMP" jt="93" >
+				<comment><![CDATA[This entry is valid until this time (may be null.)]]></comment>
+			</column>
+			<index name="idx_tags_0" unique="NORMAL" >
+				<column name="userid" />
+			</index>
+			<index name="pk_tags" unique="NORMAL" >
+				<column name="chipid" />
+			</index>
+			<index name="idx_tags" unique="UNIQUE" >
+				<column name="starttime" />
+				<column name="chipid" />
+			</index>
+			<fk name="fk_tags_users" to_schema="racetest" to_table="users" >
+				<fk_column name="userid" pk="userid" />
+			</fk>
+			<fk name="fk_tags_chips" to_schema="racetest" to_table="chips" >
+				<fk_column name="chipid" pk="chipid" />
+			</fk>
+		</table>
+		<table name="chips" >
+			<comment>Canonical list of chips and if they are loaners.</comment>
+			<column name="organizerid" type="INT" jt="4" />
+			<column name="chipid" type="INT" jt="4" mandatory="y" autoincrement="y" >
+				<comment><![CDATA[uniquely identify chip table entry]]></comment>
+			</column>
+			<column name="chip" type="VARCHAR" length="20" jt="12" >
+				<comment><![CDATA[As received or entered manually.]]></comment>
+			</column>
+			<column name="loaner" type="BOOL" jt="-7" >
+				<comment><![CDATA[Set to true if this is a loaner chip.]]></comment>
+			</column>
+			<column name="shortname" type="VARCHAR" length="10" jt="12" mandatory="y" >
+				<comment><![CDATA[If the loaner flag is set then this is the optional Short Display Name.]]></comment>
+			</column>
+			<column name="totalactivations" type="INT" jt="4" >
+				<comment><![CDATA[Total number of recorded activations.]]></comment>
+			</column>
+			<column name="currentactivations" type="INT" jt="4" >
+				<comment><![CDATA[Number of activations since most recent battery change.]]></comment>
+			</column>
+			<column name="replacebattery" type="BOOL" jt="-7" >
+				<comment><![CDATA[Set if percentage of BATT OK count was below 90% in a lapset.]]></comment>
+			</column>
+			<column name="batteryreplaced" type="DATE" jt="91" >
+				<comment><![CDATA[Set to the date the battery was replaced.]]></comment>
+			</column>
+			<index name="pk_chips" unique="PRIMARY_KEY" >
+				<column name="chipid" />
+			</index>
+			<index name="idx_chips_0" unique="NORMAL" >
+				<column name="organizerid" />
+			</index>
+			<index name="idx_chips" unique="UNIQUE" >
+				<column name="chip" />
+			</index>
+			<fk name="fk_chips_organizers" to_schema="racetest" to_table="organizers" >
+				<fk_column name="organizerid" pk="organizerid" />
+			</fk>
+		</table>
+		<table name="events" >
+			<comment>List of workouts, races, at a venue.
+</comment>
+			<column name="eventid" type="INT" jt="4" mandatory="y" autoincrement="y" >
+				<comment><![CDATA[uniquely identify event table entry]]></comment>
+			</column>
+			<column name="venueid" type="INT" jt="4" />
+			<column name="starttime" type="TIMESTAMP" jt="93" mandatory="y" />
+			<column name="finishtime" type="TIMESTAMP" jt="93" />
+			<column name="description" type="VARCHAR" length="100" jt="12" >
+				<comment><![CDATA[What the workout or race is.]]></comment>
+			</column>
+			<column name="start" type="INT" jt="4" >
+				<comment><![CDATA[start number if a number of categories are in race]]></comment>
+			</column>
+			<column name="category" type="VARCHAR" length="20" jt="12" >
+				<comment><![CDATA[Category of race, e.g. A/B/C or Cat 1/2, 3, 4.]]></comment>
+			</column>
+			<column name="eventtype" type="VARCHAR" length="20" jt="12" >
+				<comment><![CDATA[Type of event, workout, track, road, timetrial.]]></comment>
+			</column>
+			<column name="laps" type="INT" jt="4" >
+				<comment><![CDATA[number of laps in race]]></comment>
+			</column>
+			<column name="sprints" type="INT" jt="4" >
+				<comment><![CDATA[number of sprints]]></comment>
+			</column>
+			<index name="pk_events" unique="PRIMARY_KEY" >
+				<column name="eventid" />
+			</index>
+			<index name="idx_events" unique="NORMAL" >
+				<column name="venueid" />
+				<column name="starttime" />
+				<column name="finishtime" />
+				<column name="description" />
+			</index>
+			<index name="idx_events_0" unique="UNIQUE" >
+				<column name="venueid" />
+				<column name="starttime" />
+				<column name="description" />
+			</index>
+			<fk name="fk_events_venues" to_schema="racetest" to_table="venues" >
+				<fk_column name="venueid" pk="venueid" />
+			</fk>
+		</table>
+		<table name="groupsets" >
+			<column name="groupsetid" type="INT" jt="4" mandatory="y" autoincrement="y" />
+			<column name="venueid" type="INT" jt="4" />
+			<column name="datestamp" type="DATETIME" jt="93" mandatory="y" />
+			<column name="lengthms" type="INT" jt="4" />
+			<column name="gapms" type="INT" jt="4" />
+			<column name="members" type="INT" jt="4" />
+			<index name="pk_groupset" unique="PRIMARY_KEY" >
+				<column name="groupsetid" />
+			</index>
+			<index name="idx_groupsets" unique="UNIQUE" >
+				<column name="venueid" />
+				<column name="datestamp" />
+			</index>
+			<fk name="fk_groupset_venues" to_schema="racetest" to_table="venues" >
+				<fk_column name="venueid" pk="venueid" />
+			</fk>
+		</table>
+		<table name="laps" >
+			<comment>Per Lap Timing Data, as received from the timing system. </comment>
+			<column name="lapsetid" type="INT" jt="4" >
+				<comment><![CDATA[All consecutive lap entries belonging to a single users workout are identified with the same lapsetid.
+]]></comment>
+			</column>
+			<column name="groupsetid" type="INT" jt="4" />
+			<column name="datestamp" type="DATETIME" jt="93" >
+				<comment><![CDATA[When the timing record was recorded.]]></comment>
+			</column>
+			<column name="lapnumber" type="INT" jt="4" >
+				<comment><![CDATA[The lap number, where consecutive laps have been recorded, this is the lap number.
+]]></comment>
+			</column>
+			<column name="groupnumber" type="INT" jt="4" >
+				<comment><![CDATA[A group of entries is where all consecutive entries are within the (venued specific) gaptime.]]></comment>
+			</column>
+			<column name="finishms" type="INT" jt="4" mandatory="y" >
+				<comment><![CDATA[Absolute timestamp for timing data for the end of the lap. 
+This is a required field.]]></comment>
+			</column>
+			<column name="startms" type="INT" jt="4" >
+				<comment><![CDATA[Optional field if this timing record represents a full lap. ]]></comment>
+			</column>
+			<column name="groupms" type="INT" jt="4" >
+				<comment><![CDATA[Optional field if this timing entry was part of a group passing the timing point.]]></comment>
+			</column>
+			<column name="lapms" type="INT" jt="4" >
+				<comment><![CDATA[Optional field representing the actual elapsed time for a lap if startms is valid.
+]]></comment>
+			</column>
+			<column name="correction" type="INT" jt="4" />
+			<column name="skippedflag" type="BOOL" jt="-7" />
+			<column name="battery" type="INT" jt="4" />
+			<index name="idx_lapd_0" unique="NORMAL" >
+				<column name="datestamp" />
+			</index>
+			<index name="idx_lapd_2" unique="NORMAL" >
+				<column name="lapsetid" />
+			</index>
+			<index name="idx_laps" unique="UNIQUE" >
+				<column name="datestamp" />
+				<column name="lapsetid" />
+				<column name="lapnumber" />
+			</index>
+			<index name="idx_laps_0" unique="NORMAL" >
+				<column name="groupsetid" />
+			</index>
+			<fk name="fk_lapd_workouts" to_schema="racetest" to_table="lapsets" >
+				<fk_column name="lapsetid" pk="lapsetid" />
+			</fk>
+			<fk name="fk_laps_groupset" to_schema="racetest" to_table="groupsets" >
+				<fk_column name="groupsetid" pk="groupsetid" />
+			</fk>
+		</table>
+		<table name="lapsets" >
+			<comment>Summary of a set of laps (workout).</comment>
+			<column name="lapsetid" type="INT" jt="4" mandatory="y" autoincrement="y" >
+				<comment><![CDATA[uniquely identify lapset table entry]]></comment>
+			</column>
+			<column name="venueid" type="INT" jt="4" >
+				<comment><![CDATA[Where a workout took place.]]></comment>
+			</column>
+			<column name="chipid" type="INT" jt="4" >
+				<comment><![CDATA[The chip that recorded the data.]]></comment>
+			</column>
+			<column name="boxid" type="VARCHAR" length="2" jt="12" >
+				<comment><![CDATA[unique id if multiple timing decoders in use at an event]]></comment>
+			</column>
+			<column name="starttime" type="DATETIME" jt="93" mandatory="y" >
+				<comment><![CDATA[when workout started
+]]></comment>
+			</column>
+			<column name="finishtime" type="DATETIME" jt="93" >
+				<comment><![CDATA[when workout finished (may be null)]]></comment>
+			</column>
+			<column name="totalms" type="INT" jt="4" >
+				<comment><![CDATA[length of workout in milli-seconds.]]></comment>
+			</column>
+			<column name="bestlapms" type="INT" jt="4" >
+				<comment><![CDATA[Best lap time in milli-seconds]]></comment>
+			</column>
+			<column name="laps" type="INT" jt="4" >
+				<comment><![CDATA[Number of laps recorded.]]></comment>
+			</column>
+			<column name="skippedcount" type="INT" jt="4" >
+				<comment><![CDATA[Total skipped lap count]]></comment>
+			</column>
+			<column name="corrections" type="INT" jt="4" >
+				<comment><![CDATA[Total corrections]]></comment>
+			</column>
+			<column name="battery" type="INT" jt="4" >
+				<comment><![CDATA[Total battery ]]></comment>
+			</column>
+			<index name="pk_workouts" unique="PRIMARY_KEY" >
+				<column name="lapsetid" />
+			</index>
+			<index name="pk_workouts_0" unique="NORMAL" >
+				<column name="starttime" />
+			</index>
+			<index name="pk_workouts_1" unique="NORMAL" >
+				<column name="finishtime" />
+			</index>
+			<index name="idx_workouts" unique="UNIQUE" >
+				<column name="chipid" />
+				<column name="starttime" />
+			</index>
+			<fk name="fk_workouts_chips" to_schema="racetest" to_table="chips" >
+				<fk_column name="chipid" pk="chipid" />
+			</fk>
+			<fk name="fk_workouts_venues" to_schema="racetest" to_table="venues" >
+				<fk_column name="venueid" pk="venueid" />
+			</fk>
+		</table>
+		<table name="organizers" >
+			<comment>List of  organizers that own venues, do events, loan chips.</comment>
+			<column name="organizerid" type="INT" jt="4" mandatory="y" autoincrement="y" >
+				<comment><![CDATA[uniquely identify organizer table entry]]></comment>
+			</column>
+			<column name="organizer" type="VARCHAR" length="20" jt="12" mandatory="y" >
+				<comment><![CDATA[Short display name for organizer.]]></comment>
+			</column>
+			<column name="description" type="VARCHAR" length="100" jt="12" >
+				<comment><![CDATA[Long description for organizer.]]></comment>
+			</column>
+			<index name="pk_organizers" unique="PRIMARY_KEY" >
+				<column name="organizerid" />
+			</index>
+			<index name="idx_organizers" unique="UNIQUE" >
+				<column name="organizer" />
+			</index>
+		</table>
+		<table name="users" >
+			<comment>Self Administered information about users.</comment>
+			<column name="userid" type="INT" jt="4" mandatory="y" autoincrement="y" >
+				<comment><![CDATA[uniquely identify user table entry]]></comment>
+			</column>
+			<column name="lastname" type="VARCHAR" length="100" jt="12" />
+			<column name="firstname" type="VARCHAR" length="100" jt="12" />
+			<column name="login" type="VARCHAR" length="32" jt="12" />
+			<column name="email" type="VARCHAR" length="200" jt="12" />
+			<column name="gender" type="VARCHAR" length="1" jt="12" />
+			<column name="team" type="VARCHAR" length="100" jt="12" />
+			<column name="yob" type="VARCHAR" length="4" jt="12" />
+			<column name="ucicat" type="VARCHAR" length="12" jt="12" />
+			<column name="abilitycat" type="VARCHAR" length="20" jt="12" />
+			<column name="privacyflag" type="VARCHAR" length="10" jt="12" />
+			<column name="strava" type="VARCHAR" length="100" jt="12" />
+			<column name="ucicode" type="VARCHAR" length="20" jt="12" >
+				<comment><![CDATA[UCI Code]]></comment>
+			</column>
+			<index name="pk_users" unique="PRIMARY_KEY" >
+				<column name="userid" />
+			</index>
+			<index name="idx_users_lastname_firstname" unique="UNIQUE" >
+				<column name="lastname" />
+				<column name="firstname" />
+			</index>
+			<index name="idx_users_login" unique="NORMAL" >
+				<column name="login" />
+			</index>
+		</table>
+		<table name="venues" >
+			<comment>list of locations that organizers run races at</comment>
+			<column name="venueid" type="INT" jt="4" mandatory="y" autoincrement="y" >
+				<comment><![CDATA[uniquely identify venue table entry]]></comment>
+			</column>
+			<column name="organizerid" type="INT" length="20" jt="4" mandatory="y" >
+				<comment><![CDATA[Organizer that uses this venue.]]></comment>
+			</column>
+			<column name="venue" type="VARCHAR" length="20" jt="12" mandatory="y" >
+				<comment><![CDATA[Short display name for venue.]]></comment>
+			</column>
+			<column name="description" type="VARCHAR" length="100" jt="12" mandatory="y" >
+				<comment><![CDATA[Description of the venue.]]></comment>
+			</column>
+			<column name="distance" type="FLOAT" jt="7" >
+				<comment><![CDATA[in km of each lap]]></comment>
+			</column>
+			<column name="minspeed" type="FLOAT" jt="7" >
+				<comment><![CDATA[minimum expected speed]]></comment>
+			</column>
+			<column name="maxspeed" type="FLOAT" jt="7" >
+				<comment><![CDATA[maximum expected speed]]></comment>
+			</column>
+			<column name="gaptime" type="FLOAT" jt="7" >
+				<comment><![CDATA[allowable gap in ms between riders in a group]]></comment>
+			</column>
+			<column name="timezone" type="VARCHAR" length="20" jt="12" >
+				<comment><![CDATA[Timezone that the timing system generates TimeStamps in.]]></comment>
+			</column>
+			<column name="activeflag" type="BOOL" jt="-7" >
+				<comment><![CDATA[active venue]]></comment>
+			</column>
+			<index name="pk_venues" unique="PRIMARY_KEY" >
+				<column name="venueid" />
+			</index>
+			<index name="idx_venues" unique="NORMAL" >
+				<column name="organizerid" />
+			</index>
+			<index name="idx_venues_by_venue" unique="UNIQUE" >
+				<column name="venue" />
+			</index>
+			<fk name="fk_venues_organizers" to_schema="racetest" to_table="organizers" >
+				<fk_column name="organizerid" pk="organizerid" />
+			</fk>
+		</table>
+		<table name="health" >
+			<comment>This table summarizes chip health indicators by date.</comment>
+			<column name="healthid" type="INT" jt="4" mandatory="y" autoincrement="y" />
+			<column name="chipid" type="INT" jt="4" />
+			<column name="datestamp" type="DATE" jt="91" >
+				<comment><![CDATA[Date chip health recorded on.]]></comment>
+			</column>
+			<column name="activations" type="INT" jt="4" >
+				<comment><![CDATA[Number of activations.]]></comment>
+			</column>
+			<column name="battery" type="INT" jt="4" >
+				<comment><![CDATA[Total of battery flags.]]></comment>
+			</column>
+			<column name="skippedcount" type="INT" jt="4" >
+				<comment><![CDATA[Total possibly skipped laps.]]></comment>
+			</column>
+			<column name="corrections" type="INT" jt="4" >
+				<comment><![CDATA[Total of correction fields.]]></comment>
+			</column>
+			<column name="batteryreplacedflag" type="BOOL" jt="-7" />
+			<index name="pk_chiphealth" unique="PRIMARY_KEY" >
+				<column name="healthid" />
+			</index>
+			<index name="idx_health" unique="NORMAL" >
+				<column name="chipid" />
+			</index>
+			<fk name="fk_health_chips" to_schema="racetest" to_table="chips" >
+				<fk_column name="chipid" pk="chipid" />
+			</fk>
+		</table>
+	</schema>
+	<connector name="RaceTest" database="MySql" driver_class="com.mysql.jdbc.Driver" driver_jar="mysql-connector-java-5.1.20-bin.jar" host="whiskey.local" port="3306" instance="information_schema" user="root" passwd="YWEuYmIuY2M=" schema_mapping="" />
+	<layout name="race1" show_schema_name="y" show_relation_name="y" >
+		<entity schema="racetest" name="users" x="854" y="98" />
+		<entity schema="racetest" name="events" x="56" y="42" />
+		<entity schema="racetest" name="organizers" x="448" y="42" />
+		<entity schema="racetest" name="groupsets" x="42" y="406" />
+		<entity schema="racetest" name="chiphistory" x="644" y="56" />
+		<entity schema="racetest" name="chips" x="644" y="252" />
+		<entity schema="racetest" name="venues" x="252" y="84" />
+		<entity schema="racetest" name="health" x="672" y="490" />
+		<entity schema="racetest" name="lapsets" x="420" y="420" />
+		<entity schema="racetest" name="laps" x="238" y="490" />
+		<group name="venue data" color="c4e0f9" >
+			<comment>xxxxx</comment>
+			<entity schema="racetest" name="laps" />
+			<entity schema="racetest" name="lapsets" />
+			<entity schema="racetest" name="groupsets" />
+		</group>
+		<group name="Administrative" color="c4e0f9" >
+			<entity schema="racetest" name="organizers" />
+			<entity schema="racetest" name="venues" />
+			<entity schema="racetest" name="events" />
+		</group>
+		<group name="user information" color="c4e0f9" >
+			<entity schema="racetest" name="users" />
+		</group>
+		<group name="Chip Administration" color="c4e0f9" >
+			<entity schema="racetest" name="chips" />
+			<entity schema="racetest" name="chiphistory" />
+			<entity schema="racetest" name="health" />
+		</group>
+	</layout>
+</project>
