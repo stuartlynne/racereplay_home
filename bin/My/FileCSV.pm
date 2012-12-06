@@ -60,7 +60,10 @@ sub do_csv {
     print_csv_str("startms",0);
     print_csv_str("groupms",0);
     print_csv_str("lapms",0);
-    print_csv_str("groupnumber",1);
+    print_csv_str("groupnumber",0);
+    print_csv_str("batt",0);
+    print_csv_str("corr",0);
+    print_csv_str("skipped",1);
 
     while ( my $row = $sthl->fetchrow_hashref()) {
 
@@ -78,7 +81,10 @@ sub do_csv {
             print_csv_str($row->{'startms'},0);
             print_csv_str($row->{'groupms'},0);
             print_csv_str($row->{'lapms'},0);
-            print_csv_str($row->{'groupnumber'},1);
+            print_csv_str($row->{'groupnumber'},0);
+            print_csv_str($row->{'battery'},0);
+            print_csv_str($row->{'correction'},0);
+            print_csv_str($row->{'skippedflag'},1);
         }
         $sthd->finish();
     }
