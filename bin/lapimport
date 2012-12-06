@@ -255,19 +255,19 @@ sub update_lapset {
     }
 
     printf STDERR "UPDATE lapsets l LEFT JOIN chips c ON l.chipid = c.chipid LEFT JOIN health h ON c.chipid = h.chipid SET 
-                l.finishtime=%s, l.laps=%s, l.totalms=%s, l.bestlapms=%s, 
+                l.finishtime=%s, l.laps=%s, l.totalms=%s, l.bestlapms=%s, l.battery=%s, l.skippedcount=%s, l.corrections=%s, 
                 c.currentactivations=c.currentactivations+%s, c.totalactivations=c.totalactivations+%s, c.replacebattery=c.replacebattery OR %d,
                 h.activations=h.activations+%s, h.corrections=h.corrections+%s, h.battery=h.battery+%s, h.skippedcount=h.skippedcount+%s
                 WHERE l.lapsetid=%s AND c.chipid=%s AND h.healthid=%s\n",
 
-                $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, 
+                $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, $battery, $LapSkippedCount{$tagid}, $LapCorrections{$tagid},
                 $laps, $laps, $replacebattery, 
                 $activations, $LapCorrections{$tagid}, $battery, $LapSkippedCount{$tagid}, 
                 $LapSetid{$tagid}, $chipid, $Health{$tagid}
     if ($DEBUG);
 
     $uLapsetChipSth->execute(
-                $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, 
+                $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, $battery, $LapSkippedCount{$tagid}, $LapCorrections{$tagid},
                 $laps, $laps, $replacebattery, 
                 $activations, $LapCorrections{$tagid}, $battery, $LapSkippedCount{$tagid}, 
                 $LapSetid{$tagid}, $chipid, $Health{$tagid}
@@ -355,12 +355,12 @@ sub insert_lapset {
 
     #printf STDERR Dumper(\@_);
 
-    printf STDERR "INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,laps,boxid) VALUES(%s,%s,%s,%s,%s,%s)\n",
-           $venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid if ($DEBUG);
+    printf STDERR "INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,laps,boxid,battery,skippedcount,corrections) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)\n",
+           $venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0" if ($DEBUG);
 
     # may fail if it was previously inserted
     #
-    unless ($iLapsetSth->execute($venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid)) {
+    unless ($iLapsetSth->execute($venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0")) {
         printf STDERR "%s - lapsets\n", $iLapsetSth->errstr if ($VERBOSE);
     }
 
@@ -392,13 +392,13 @@ sub insert_lapset {
 #
 sub insert_lap {
 
-        my ($tagid, $datestamp, $lapsetid, $laps, $finishms, $startms, $groupms, $lapms, $corr, $skippedflag) = @_;
+        my ($tagid, $datestamp, $lapsetid, $laps, $finishms, $startms, $groupms, $lapms, $batteryflag, $corr, $skippedflag) = @_;
 
-        printf STDERR "INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,correction,skippedflag) 
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-               $datestamp, $lapsetid,$laps,$finishms,$startms,$groupms,$lapms,$corr,$skippedflag if ($DEBUG);
+        printf STDERR "INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,battery,correction,skippedflag) 
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+               $datestamp, $lapsetid,$laps,$finishms,$startms,$groupms,$lapms,$batteryflag,$corr,$skippedflag if ($DEBUG);
 
-        unless ($iLapSth->execute($datestamp, $lapsetid, $laps,$finishms,$startms,$groupms,$lapms,$corr,$skippedflag)) {
+        unless ($iLapSth->execute($datestamp, $lapsetid, $laps,$finishms,$startms,$groupms,$lapms,$batteryflag, $corr,$skippedflag)) {
             printf STDERR "%s - laps\n", $iLapSth->errstr if ($VERBOSE);
         }
 }
@@ -420,9 +420,10 @@ sub do_laps_init {
     $sLapsetSth =   $dbsql->prepare('SELECT lapsetid FROM lapsets WHERE chipid=? AND starttime=?');
 
     $iGroupsetSth = $dbsql->prepare('INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(?,?,?,?,?)');
-    $iLapsetSth =   $dbsql->prepare('INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid) VALUES(?,?,?,?,?,?,?,?)');
-    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,correction,skippedflag) 
-                VALUES(?,?,?,?,?,?,?,?,?)');
+    $iLapsetSth =   $dbsql->prepare('INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid,battery,skippedcount,corrections) 
+                                                VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,battery,correction,skippedflag) 
+                VALUES(?,?,?,?,?,?,?,?,?,?)');
 
     $uGroupsetSth = $dbsql->prepare('UPDATE groupsets SET datestamp=?, members=?, lengthms=? WHERE groupsetid=?');
     $uLapsetChipSth=$dbsql->prepare(
@@ -430,7 +431,7 @@ sub do_laps_init {
             LEFT JOIN chips c ON l.chipid = c.chipid 
             LEFT JOIN health h ON c.chipid = h.chipid
             SET 
-                l.finishtime=?, l.laps=?, l.totalms=?, l.bestlapms=?, 
+                l.finishtime=?, l.laps=?, l.totalms=?, l.bestlapms=?, l.battery=?, l.skippedcount=?, l.corrections=?, 
                 c.currentactivations=c.currentactivations+?, c.totalactivations=c.totalactivations+?, c.replacebattery=c.replacebattery OR ?,
                 h.activations=h.activations+?, h.corrections=h.corrections+?, h.battery=h.battery+?, h.skippedcount=h.skippedcount+?
             WHERE 
@@ -551,7 +552,7 @@ sub do_lap {
 
     # Finally, insert a new lap record.
     #
-    insert_lap($tagid, $datestamp, $LapSetid{$tagid}, $Laps{$tagid}, $finishms, $startms, $groupms, $lapms, $corr, $skippedflag);
+    insert_lap($tagid, $datestamp, $LapSetid{$tagid}, $Laps{$tagid}, $finishms, $startms, $groupms, $lapms, $batteryflag, $corr, $skippedflag);
 
 
 }   
@@ -587,7 +588,7 @@ sub file_io_mode {
         #$row = simple_csv_parse($rcsv, $_, 0);
         $row = SimpleCSV::parse($rcsv, $_, 0);
 
-        print STDERR Dumper($row);
+        #print STDERR Dumper($row);
 
         unless (defined($row) && $row != 0) {
             printf STDERR "Empty row skipped\n";
