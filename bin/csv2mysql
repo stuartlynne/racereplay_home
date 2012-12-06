@@ -327,13 +327,11 @@ sub do_chiphistory{
     my $cSth = $dbcsv->prepare( $cStmt );
     $cSth->execute() || die "Execute failed\n";
 
-    my %CKey = FKey::init($dbsql, 'chip');
     my %UKey = ukey_init($dbsql, 'user');
     my $keyid_name = 'userid';
     
     my $sql = SQL::Abstract->new();
 
-    my %CKeys;
     my %UKeys;
     my ($iStmt, @iBind, $uStmt, @uBind, $iuStmt, $iuSth);
 
@@ -346,7 +344,7 @@ sub do_chiphistory{
         #printf STDERR Dumper($row);
 
         my $chip_val = $row->{'tagid'};
-        printf STDERR "chip_val: %s\n", $chip_val;
+        #printf STDERR "chip_val: %s\n", $chip_val;
         my $chipid_val = Misc::find_chipid($dbsql, $chip_val);
         $row->{'chipid'} = $chipid_val;
 
@@ -367,7 +365,6 @@ sub do_chiphistory{
         else {
             $userid_val = $UKeys{$name_val};
         }
-        #printf STDERR "userid: %s\n", $userid_val;
         $row->{'userid'} = $userid_val;
 
         # ensure that we do not have any existing chip history records
@@ -387,7 +384,6 @@ sub do_chiphistory{
         delete $row->{'firstname'};
         delete $row->{'lastname'};
         ($uStmt, @uBind) = $sql->update($table, $row);
-        #delete $row->{'userid'};
         ($iStmt, @iBind) = $sql->insert($table, $row);
 
 
@@ -407,10 +403,6 @@ sub do_chiphistory{
 
     $cSth->finish();
     ukey_finish(%UKey);
-    FKey::finish(%CKey);
-    #dump_sql('chips', $dbsql);
-    #dump_sql('users', $dbsql);
-    #dump_sql($table, $dbsql);
 }   
 
 # do_newbattery
@@ -574,10 +566,7 @@ if ($table eq "chips") {
 #
 #       chiphistory - userid from firstname, lastname
 #
-#       lapd
-#               - insert lapd record with lapsetid
-#               - insert lapset record with correct start and finish time and chipid
-#               - add chip record if required
+#       newbattery - update battery replacements
 #
 if ($table eq "tags") {
     do_chiphistory($table, $dbcsv, $dbsql);
