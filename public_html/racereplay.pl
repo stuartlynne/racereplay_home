@@ -113,6 +113,7 @@ sub do_page {
                 ), "\n",
 
             # End HTML
+            $cgi->comment("Copyright(c)2012 Stuart.Lynne\@gmail.com"),
             $cgi->end_html(), "\n",
         );
 }
@@ -776,7 +777,10 @@ sub do_workouts {
                     $cgi->b("Distance (km)"), 
                     $cgi->b("Avg (kph"), 
                     $cgi->b("Fastest"), 
-                    $cgi->b("Best Lap (kph)")
+                    $cgi->b("Best Lap (kph)"),
+                    $cgi->b("Batt"),
+                    $cgi->b("Corr"),
+                    $cgi->b("Skipped"),
                     ]))
         );
 
@@ -878,7 +882,10 @@ sub do_workouts {
                     $cgi->td(sprintf("%5.1f", $laps * $distance)),
                     $cgi->td(sprintf("%5.1f", kph(($laps * $distance), $row->{'totalms'}))),
                     $cgi->td(sprintf("%5.1f", $bestlapms/1000)),
-                    $cgi->td(sprintf("%5.1f", kph(($distance), $bestlapms)))
+                    $cgi->td(sprintf("%5.1f", kph(($distance), $bestlapms))),
+                    $cgi->td($row->{'battery'}),
+                    $cgi->td($row->{'corrections'}),
+                    $cgi->td($row->{'skippedcount'}),
                     #$cgi->td(checkbox(sprintf("select-%s", $key),0, $ChipIDs{$key},""))
                     ));
         $count++;
