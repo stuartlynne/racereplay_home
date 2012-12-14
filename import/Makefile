@@ -1,8 +1,13 @@
 
-PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
+#PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
 
-DATABASE = "racereplay"
-DBUSER = "racereplay"
+DIR=$(shell expr $$(pwd) : "/home/\([^/]*\)")
+
+
+PATH = ":/bin:/usr/bin:/usr/local/bin:/home/${DIR}/bin:"
+
+DATABASE = "${DIR}"
+DBUSER = "${DIR}"
 DBPASSWORD = "aa.bb.cc"
 
 
@@ -28,6 +33,7 @@ MISCTABLES = $(subst .csv,.tab,${MISCFILES})
 
 .PHONY : all usage lapd tables test clean
 
+
 all: lapd daily
 
 
@@ -43,17 +49,23 @@ daily: ${DAILYTABLES}
 misc: ${MISCTABLES}
 
 test:
+	@echo DIR: ${DIR}
 	@echo CSV: ${CSV}
 	@echo FILES: ${FILES}
 	@echo ADMINTABLES: ${ADMINTABLES}
 	@echo MISC: ${MISCTABLES}
 	@echo PATH: ${PATH}
+	@echo DATABASE: ${DATABASE}
+	@echo DBUSER: ${DBUSER}
 
 drop: clean
 	@echo "DROP DATABASE ${DATABASE};" | mysql -u root -p
 
 create:
-	cat /home/${DBUSER}/etc/${DATABASE}.sql | mysql -u root -p
+	createdb ${DATABASE}
+	#cat /home/${DBUSER}/etc/${DATABASE}.sql | mysql -u root -p
+
+new: clean drop create
 
 
 clean:
