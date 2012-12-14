@@ -1,0 +1,10 @@
+#!/bin/sh
+
+[ $# -eq 1 ] || ( echo "Usage: addmysqluser name" ; exit 1)
+
+DATABASE=$1
+
+echo "grant CREATE,INSERT,DELETE,UPDATE,SELECT on $DATABASE.* to $DATABASE@localhost;"
+echo "set password for $DATABASE = password('aa.bb.cc');"
+echo "flush privileges;"
+echo "exit;"

@@ -1,0 +1,18 @@
+#!/bin/sh
+
+
+[ $# -eq 1 ] || ( echo "Usage: createdb name" ; exit 1)
+
+DATABASE=$1
+
+(
+cat /home/${DATABASE}/etc/${DATABASE}.sql 
+) | mysql -u root -p
+
+(
+echo "grant CREATE,INSERT,DELETE,UPDATE,SELECT on $DATABASE.* to $DATABASE@localhost;"
+echo "set password for $DATABASE@localhost = password('aa.bb.cc');"
+echo "flush privileges;"
+
+) | mysql -u root -p
+
