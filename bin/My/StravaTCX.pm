@@ -92,7 +92,7 @@ sub do_strava_tcx {
     printf $cgi->header( '-Content-Disposition' => sprintf("attachment;filename=\"%s-%s.tcx\"", $name, $starttime),
             '-Content-Type' => "text/plain");
     
-    my $sthl = $dbh->prepare("SELECT * FROM lapsets l JOIN chips c ON l.chipid = c.chipid
+    my $sthl = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
                 WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
 
@@ -122,15 +122,15 @@ sub do_strava_tcx {
 
     while ( my $row = $sthl->fetchrow_hashref()) {
 
-        my $lapsetid = $row->{'lapsetid'};
+        my $workoutid = $row->{'workoutid'};
 
-        printf STDERR "do_strava_tcx: lapsetid: %s\n", $lapsetid;
+        printf STDERR "do_strava_tcx: workoutid: %s\n", $workoutid;
 
-        printf STDERR "SELECT * FROM laps WHERE lapsetid = %s  ORDER BY datestamp ASC\n", $lapsetid;
+        printf STDERR "SELECT * FROM laps WHERE workoutid = %s  ORDER BY datestamp ASC\n", $workoutid;
 
-        my $sthd = $dbh->prepare("SELECT * FROM laps WHERE lapsetid = ?  ORDER BY datestamp ASC");
+        my $sthd = $dbh->prepare("SELECT * FROM laps WHERE workoutid = ?  ORDER BY datestamp ASC");
 
-        $sthd->execute($lapsetid) || die "Execute failed\n";
+        $sthd->execute($workoutid) || die "Execute failed\n";
 
         my $count = 0;
         unless ($lapcount) {

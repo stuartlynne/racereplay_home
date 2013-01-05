@@ -674,7 +674,7 @@ sub do_workouts {
 
     my $total = 0;
 
-    my $sth = $dbh->prepare("SELECT * FROM lapsets l JOIN chips c ON l.chipid = c.chipid
+    my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
                 WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
 
@@ -755,7 +755,7 @@ sub do_workouts {
                     $cgi->td($row->{'battery'}),
                     $cgi->td($row->{'corrections'}),
                     $cgi->td($row->{'skippedcount'}),
-                    $cgi->td(checkbox(sprintf("lapsetid-%s-%s", $starttime, $finishtime),0, $row->{'lapsetid'},""))
+                    $cgi->td(checkbox(sprintf("workoutid-%s-%s", $starttime, $finishtime),0, $row->{'workoutid'},""))
                     ));
         $count++;
     }
@@ -878,17 +878,17 @@ sub do_compare {
     my @Content;
     my $workoutcount = 0;
 
-    my $lapsetid = -1;
+    my $workoutid = -1;
     my $laps = -1;
 
     for my $key (param) {
         my $parameter = param($key);
 
-        if ($key =~ /lapsetid-/) {
+        if ($key =~ /workoutid-/) {
             $key =~ s/select-//;
             printf STDERR "key: %s\n", $key;
             printf STDERR "parameter: %s\n", $parameter;
-            $lapsetid = $parameter;
+            $workoutid = $parameter;
         }
 
         if ($key eq "laps") {
@@ -896,8 +896,8 @@ sub do_compare {
         }
     }
 
-    if ($lapsetid) {
-        push(@Content, Race::do_analysis ($dbh, $cgi, $workoutcount++, -1, $lapsetid, $laps, 0, "", "", "", "", 0));
+    if ($workoutid) {
+        push(@Content, Race::do_analysis ($dbh, $cgi, $workoutcount++, -1, $workoutid, $laps, 0, "", "", "", "", 0));
     }
 
     # Create Aside

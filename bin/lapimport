@@ -30,8 +30,8 @@
 #       racereplay.groupsets
 #               - create a groupset record when required
 #
-#       racereplay.lapsets
-#               - create a lapset record when required
+#       racereplay.workouts
+#               - create a workout record when required
 #
 #
 #       racereplay.laps
@@ -254,11 +254,11 @@ sub update_lapset {
         $replacebattery = 1 if (($activations > 20) && ($battery / $activations) < .9);
     }
 
-    printf STDERR "UPDATE lapsets l LEFT JOIN chips c ON l.chipid = c.chipid LEFT JOIN health h ON c.chipid = h.chipid SET 
+    printf STDERR "UPDATE workouts l LEFT JOIN chips c ON l.chipid = c.chipid LEFT JOIN health h ON c.chipid = h.chipid SET 
                 l.finishtime=%s, l.laps=%s, l.totalms=%s, l.bestlapms=%s, l.battery=%s, l.skippedcount=%s, l.corrections=%s, 
                 c.currentactivations=c.currentactivations+%s, c.totalactivations=c.totalactivations+%s, c.replacebattery=c.replacebattery OR %d,
                 h.activations=h.activations+%s, h.corrections=h.corrections+%s, h.battery=h.battery+%s, h.skippedcount=h.skippedcount+%s
-                WHERE l.lapsetid=%s AND c.chipid=%s AND h.healthid=%s\n",
+                WHERE l.workoutid=%s AND c.chipid=%s AND h.healthid=%s\n",
 
                 $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, $battery, $LapSkippedCount{$tagid}, $LapCorrections{$tagid},
                 $laps, $laps, $replacebattery, 
@@ -355,28 +355,28 @@ sub insert_lapset {
 
     #printf STDERR Dumper(\@_);
 
-    printf STDERR "INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,laps,boxid,battery,skippedcount,corrections) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)\n",
+    printf STDERR "INSERT INTO workouts (venueid,chipid,starttime,finishtime,totalms,laps,boxid,battery,skippedcount,corrections) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)\n",
            $venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0" if ($DEBUG);
 
     # may fail if it was previously inserted
     #
     unless ($iLapsetSth->execute($venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0")) {
-        printf STDERR "%s - lapsets\n", $iLapsetSth->errstr if ($VERBOSE);
+        printf STDERR "%s - workouts\n", $iLapsetSth->errstr if ($VERBOSE);
     }
 
-    # get lapsetid
+    # get workoutid
     #
-    $sLapsetSth->execute($chipid, $datestamp) || die "Cannot find lapsetid\n";
+    $sLapsetSth->execute($chipid, $datestamp) || die "Cannot find workoutid\n";
 
     my $srow = $sLapsetSth->fetchrow_hashref();
 
     unless (defined($srow)) {
-        die "Could not find lapsetid\n";
+        die "Could not find workoutid\n";
     }
 
     # reset the appropriate fields associated with this tagid
     #
-    $LapSetid{$tagid} = $srow->{'lapsetid'};
+    $LapSetid{$tagid} = $srow->{'workoutid'};
     $Laps{$tagid} = 0;
     $Activations{$tagid} = 0;
     $LapBestms{$tagid} = $lapms;
@@ -392,13 +392,13 @@ sub insert_lapset {
 #
 sub insert_lap {
 
-        my ($tagid, $datestamp, $lapsetid, $groupsetid, $laps, $finishms, $startms, $groupnumber, $groupms, $lapms, $batteryflag, $corr, $skippedflag) = @_;
+        my ($tagid, $datestamp, $workoutid, $groupsetid, $laps, $finishms, $startms, $groupnumber, $groupms, $lapms, $batteryflag, $corr, $skippedflag) = @_;
 
-        printf STDERR "INSERT INTO laps (datestamp,lapsetid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
+        printf STDERR "INSERT INTO laps (datestamp,workoutid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-               $datestamp, $lapsetid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag,$corr,$skippedflag if ($DEBUG);
+               $datestamp, $workoutid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag,$corr,$skippedflag if ($DEBUG);
 
-        unless ($iLapSth->execute($datestamp, $lapsetid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag, $corr,$skippedflag)) {
+        unless ($iLapSth->execute($datestamp, $workoutid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag, $corr,$skippedflag)) {
             printf STDERR "%s - laps\n", $iLapSth->errstr if ($VERBOSE);
         }
 }
@@ -417,17 +417,17 @@ sub do_laps_init {
     # Prepare all of the SQL statements once, this improves performance
     #
     $sGroupsetSth = $dbsql->prepare('SELECT groupsetid FROM groupsets WHERE venueid=? AND datestamp=?');
-    $sLapsetSth =   $dbsql->prepare('SELECT lapsetid FROM lapsets WHERE chipid=? AND starttime=?');
+    $sLapsetSth =   $dbsql->prepare('SELECT workoutid FROM workouts WHERE chipid=? AND starttime=?');
 
     $iGroupsetSth = $dbsql->prepare('INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(?,?,?,?,?)');
-    $iLapsetSth =   $dbsql->prepare('INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid,battery,skippedcount,corrections) 
+    $iLapsetSth =   $dbsql->prepare('INSERT INTO workouts (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid,battery,skippedcount,corrections) 
                                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)');
-    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,lapsetid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
+    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,workoutid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
 
     $uGroupsetSth = $dbsql->prepare('UPDATE groupsets SET datestamp=?, members=?, lengthms=? WHERE groupsetid=?');
     $uLapsetChipSth=$dbsql->prepare(
-            'UPDATE lapsets l 
+            'UPDATE workouts l 
             LEFT JOIN chips c ON l.chipid = c.chipid 
             LEFT JOIN health h ON c.chipid = h.chipid
             SET 
@@ -435,7 +435,7 @@ sub do_laps_init {
                 c.currentactivations=c.currentactivations+?, c.totalactivations=c.totalactivations+?, c.replacebattery=c.replacebattery OR ?,
                 h.activations=h.activations+?, h.corrections=h.corrections+?, h.battery=h.battery+?, h.skippedcount=h.skippedcount+?
             WHERE 
-                l.lapsetid=? AND c.chipid=? AND h.healthid=?');
+                l.workoutid=? AND c.chipid=? AND h.healthid=?');
 
 
 }

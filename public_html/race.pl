@@ -206,7 +206,7 @@ sub do_analyze_races {
 
     push(@Content, Race::do_analysis($dbh, $cgi, $groupsetid, $maxlaps, $datestamp, $racetype, $sprint)) ;
 
-    #my ($dbh, $cgi, $reportcount, $reference_groupsetid, $reference_lapsetid, $MaxLap, $LapCorrection) = @_;
+    #my ($dbh, $cgi, $reportcount, $reference_groupsetid, $reference_workoutid, $MaxLap, $LapCorrection) = @_;
 
     my %CorrectionLabels = ( '-2' => 'Down 2', '-1' => 'Down 1', '0' => '0', '1' => 'Up 1', '2' => 'Up 2' );
     my @CorrectionValues = [-2, -1, 0, 1, 2];

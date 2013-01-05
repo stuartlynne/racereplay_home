@@ -26,10 +26,10 @@ sub Workouts::do_summary_workouts {
 
     my $total = 0;
 
-    #my $sth = $dbh->prepare("SELECT * FROM lapsets l JOIN chips c ON l.chipid = c.chipid
+    #my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
     #        WHERE venueid = (SELECT venueid FROM venues 
     #        WHERE venue=?) AND starttime >= ? and finishtime  <= ? ORDER BY starttime ASC");
-    my $sth = $dbh->prepare("SELECT * FROM lapsets l JOIN chips c ON l.chipid = c.chipid
+    my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
             WHERE venue=?) AND starttime between ? and ? ORDER BY starttime ASC");
 
@@ -49,7 +49,7 @@ sub Workouts::do_summary_workouts {
         my $laps = $row->{'laps'};
         next unless($laps > 2);
 
-        printf STDERR "[%d] lapsetid: %s start: %s finish: %s\n", $count, $row->{'lapsetid'}, $row->{'starttime'}, $row->{'finishtime'};
+        printf STDERR "[%d] workoutid: %s start: %s finish: %s\n", $count, $row->{'workoutid'}, $row->{'starttime'}, $row->{'finishtime'};
 
         my $chipid = $row->{'chipid'};
         my $chip = $row->{'chip'};
@@ -203,11 +203,11 @@ sub Workouts::do_summary_races {
     my $total = 0;
 
     my $sth = $dbh->prepare("
-            SELECT g.groupsetid, g.members, l.lapnumber, g.datestamp, l.lapsetid
+            SELECT g.groupsetid, g.members, l.lapnumber, g.datestamp, l.workoutid
             FROM groupsets g 
             JOIN events e ON e.venueid = g.venueid
             JOIN laps l ON l.groupsetid = g.groupsetid
-            JOIN lapsets s ON l.lapsetid = s.lapsetid
+            JOIN workouts s ON l.workoutid = s.workoutid
             WHERE 
                 g.datestamp BETWEEN e.starttime AND e.finishtime 
                 AND e.eventid = ? 
@@ -263,10 +263,10 @@ sub Workouts::do_summary_races {
         next unless ($GroupSetMembers{$key} > 3);
 
 #       my $sthn = $dbh->prepare("
-#               SELECT MAX(L.lapnumber) MAXLAP, L.lapsetid
+#               SELECT MAX(L.lapnumber) MAXLAP, L.workoutid
 #               FROM laps L0
-#               JOIN lapsets S ON L0.lapsetid = S.lapsetid 
-#               JOIN laps L ON L.lapsetid = S.lapsetid
+#               JOIN workouts S ON L0.workoutid = S.workoutid 
+#               JOIN laps L ON L.workoutid = S.workoutid
 #               WHERE L0.groupsetid = ?
 #               ");
 #
@@ -279,8 +279,8 @@ sub Workouts::do_summary_races {
         my $sthn = $dbh->prepare("
                 SELECT S.laps
                 FROM laps L
-                JOIN lapsets S ON L.lapsetid = S.lapsetid 
-                WHERE L.groupsetid = ?
+                JOIN workouts S ON L.workoutid = S.workoutid 
+                HERE L.groupsetid = ?
                 ");
 
         $sthn->execute($key) || die "Execute failed\n";

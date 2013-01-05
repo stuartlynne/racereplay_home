@@ -169,7 +169,7 @@ my $firsttime = 0;
 
 my $LapCurrent = -1;        # current lap for leading rider
 my @LapStart;               # time leading rider started each lap
-my %LapCount;               # lap counts for all riders by lapsetid
+my %LapCount;               # lap counts for all riders by workoutid
 my %LapArrayBehind;         # array ref per rider for time behind for each lap
 my $LapCorrection = 0;
 
@@ -438,8 +438,8 @@ sub Race::do_analysis {
             S.starttime                                                    # start time
             FROM laps L0                                                          # L0 - first lap from starting group
             JOIN laps LN ON L0.groupsetid = LN.groupsetid                         # LN - all laps from starting group
-            JOIN lapsets S ON LN.lapsetid = S.lapsetid                            # S - all lapsets for LN laps
-            JOIN laps L ON S.lapsetid = L.lapsetid AND L.finishms > LN.finishms   # L - all laps for S lapsets
+            JOIN workouts S ON LN.workoutid = S.workoutid                            # S - all workouts for LN laps
+            JOIN laps L ON S.workoutid = L.workoutid AND L.finishms > LN.finishms   # L - all laps for S workouts
             LEFT JOIN chips C ON S.chipid = C.chipid
             LEFT JOIN chiphistory H
             ON C.chipid = H.chipid AND (
@@ -465,7 +465,7 @@ sub Race::do_analysis {
 
     my $lapcurrent = -1;        # current lap for leading rider
     my @lapstart;               # time leading rider started each lap
-    my %lapcount;               # lap counts for all riders by lapsetid
+    my %lapcount;               # lap counts for all riders by workoutid
     my %laparraybehind;         # array ref per rider for time behind for each lap
 
     my %started;
@@ -484,7 +484,7 @@ sub Race::do_analysis {
         #
         $StartTime = $row->{'starttime'} unless (defined($StartTime));
         my $fullname = $row->{'FULLNAME'};
-        my $chipid = $row->{'lapsetid'};
+        my $chipid = $row->{'workoutid'};
         my $elapsed = $row->{'ELAPSED'};
         my $lapms = $row->{'lapms'};
         my $lapnumber = $row->{'lapnumber'};

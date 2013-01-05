@@ -405,18 +405,44 @@ This is a required field.]]></comment>
 			<entity schema="racetest" name="chiphistory" />
 			<entity schema="racetest" name="health" />
 		</group>
-		<script name="crc" file="file:/home/racetest/racereplay_home/etc/crc-find-laps-via-lapsetid.sql" />
-		<script name="Sql_002" >
-			<string><![CDATA[select * 
-from racetest.chiphistory h 
-order by h.userid]]></string>
+		<script name="Sql" >
+			<string><![CDATA[select g.groupsetid, g.members, l.datestamp, l.lapsetid, l.lapnumber, c.chipid
+from racetest.groupsets g
+join racetest.events e on e.venueid = g.venueid 
+join racetest.laps l on l.groupsetid = g.groupsetid
+join racetest.lapsets s on l.lapsetid = s.lapsetid
+left join racetest.chips c on s.chipid = c.chipid
+left join 
+    (select h.chipid, h.userid from racetest.chiphistory h
+     where  h.chipid = c.chipid) test on test.chipid = c.chipid
+where g.datestamp between e.starttime and e.finishtime and e.eventid = 21 and l.lapnumber = 0 and g.members > 5
+order by l.datestamp]]></string>
 		</script>
-		<script name="Sql_003" >
-			<string><![CDATA[select t.lapsetid, t.chipid, c.shortname
-from racetest.lapsets t 
-left join racetest.chips c on c.chipid = t.chipid
-left join racetest.chiphistory h on c.chipid = h.chipid
-where t.lapsetid between 470 and 471]]></string>
+		<script name="Sql_001" >
+			<string><![CDATA[SELECT L0.groupsetid, S.starttime,
+                CONCAT(U.firstname, ' ', U.lastname) FULLNAME,                 # user name
+                (L.finishms) LFINISHMS,
+                (LN.finishms) LNFINISHMS,
+                ((L.finishms - LN.finishms)) ELAPSEDMS,
+                ((L.finishms - LN.finishms) /1000) ELAPSED,       # compute elapsed time in decimal seconds
+                L.lapnumber,                                                   # lapnumber
+                L0.groupms,
+                S.chipid                                                  # chipid                                                    
+            FROM racetest.laps LN
+            JOIN racetest.lapsets S ON LN.lapsetid = S.lapsetid
+            JOIN racetest.laps L ON S.lapsetid = L.lapsetid
+            JOIN racetest.laps L0 on L0.groupsetid = LN.groupsetid and L0.groupnumber = 1
+            LEFT JOIN racetest.chips C ON S.chipid = C.chipid
+            LEFT JOIN racetest.chiphistory H
+                ON C.chipid = H.chipid AND (
+                    (S.starttime BETWEEN H.starttime AND H.finishtime) OR
+                    (S.starttime >= H.starttime and H.finishtime = '00-00-00 00:00:00'))
+            LEFT JOIN racetest.users U ON H.userid = U.userid
+            WHERE LN.groupsetid = '666'  AND S.chipid = '68'
+            ORDER by L.finishms ASC]]></string>
+		</script>
+		<script name="Sql_004" >
+			<string><![CDATA[SELECT * from racetest.events e join racetest.venues v join racetest.groupsets g where v.venueid = 1 and e.eventid = 1 and g.groupsetid = 1;]]></string>
 		</script>
 	</layout>
 </project>
