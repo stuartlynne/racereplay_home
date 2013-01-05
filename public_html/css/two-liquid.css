@@ -2,7 +2,7 @@
 {
 	margin: 0 auto;
 	width: 100%;
-        min-width: 1200px;
+        min-width: 1400px;
 	background: #fff;
 }
 
@@ -49,7 +49,7 @@
 {
 	float: left;
 	width: 100%;
-        min-width: 1200px;
+        min-width: 1400px;
 	background: #FFF url(/css/layout-two-liquid-background.gif) repeat-y 68% 0;
 }
 
@@ -58,8 +58,8 @@
 	clear: left;
 	float: left;
 	width: 60%;
-	padding: 20px 0;
-	margin: 0 0 0 4%;
+	padding: 10px 0;
+	margin: 0 0 0 2%;
 	display: inline;
 }
 
@@ -85,6 +85,16 @@
 	height: 1%;
 }
 
+.large_left_caption {
+        text-align: left;
+        font-size: 120%;
+}
+
+.small_left_caption {
+        text-align: left;
+        font-size: 100%;
+}
+
 .border {
         border: solid 10px green;
 }
@@ -99,9 +109,11 @@
 
 .tr_odd {
         background: #E6E6E6;
+        font-size: 75%;
 }
 
 .tr_even {
+        font-size: 75%;
 }
 
 .th {
