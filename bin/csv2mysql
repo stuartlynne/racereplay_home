@@ -510,6 +510,8 @@ $table =~ s/.csv//;
 my $dbcsv = DBI->connect("dbi:CSV:f_dir=$DIRECTORY;csv_eol=\n;");
 my $dbsql = DBI->connect("dbi:mysql:$DATABASE", $DBUSER, $DBPASSWORD, { 'PrintError' => 0 }) || die "Cannot connect to mysql\n";
 
+#$dbsql->{'AutoCommit'} = 0;
+
 my $csvfile = sprintf("%s.csv", $table);
 
 unless (-e $csvfile && -s $csvfile) {
@@ -529,11 +531,13 @@ $dbcsv->{ 'csv_tables' }->{ $table } = { 'file' => $csvfile };
 #
 if ($table eq "organizers") {
     do_simple($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "users") {
     do_users($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
@@ -547,16 +551,19 @@ if ($table eq "users") {
 #
 if ($table eq "venues") {
     do_oneforeign("organizer", $table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "events") {
     do_oneforeign("venue", $table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "chips") {
     do_oneforeign("organizer",$table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
@@ -570,16 +577,19 @@ if ($table eq "chips") {
 #
 if ($table eq "tags") {
     do_chiphistory($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "chiphistory") {
     do_chiphistory($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "newbattery") {
     do_newbattery($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
