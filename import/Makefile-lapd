@@ -1,5 +1,7 @@
 
-PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
+#PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
+DIR=$(shell expr $$(pwd) : "/home/\([^/]*\)")
+PATH = ":/bin:/usr/bin:/usr/local/bin:/home/${DIR}/bin:"
 
 DATABASE = "racetest"
 DBUSER = "racetest"
