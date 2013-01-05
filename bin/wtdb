@@ -354,11 +354,14 @@ sub process {
     $hhmmss =~ s/\./:/g;
     my $timestamp = "$date $hhmmss";
 
+    printf STDERR "timestamp: %s\n", $timestamp;
+
     my $dt = $date_format->parse_datetime($timestamp) || die $DateTime::Format::Strptime::errmsg;
     if ($TZ ne $tz) {
         $dt->set_time_zone($TZ);
-        $timestamp = $dt->strftime("%Y-%m-%d %H:%M:%s");
+        $timestamp = $dt->strftime("%Y-%m-%d %H:%M:%S");
     }
+    printf STDERR "timestamp: %s\n", $timestamp;
 
 
     # 
@@ -574,7 +577,7 @@ sub do_fileio {
     my $mintime = 0;
     my $maxtime = 0;
     my $gaptime = 0;
-    my $tz = "";
+    my $tz = "PST8PDT";
     if ($Venue_ref) {
         $organizer = $Venue_ref->{'organizer'};
         $distance = $Venue_ref->{'distance'};
@@ -585,6 +588,7 @@ sub do_fileio {
         $mintime = dist2ms($distance, $maxspeed);
         $maxtime = dist2ms($distance, $minspeed);
     }
+    $tz = "UTC";
 
     #open(FOUT, ">&STDOUT");
     my $count = 0;
