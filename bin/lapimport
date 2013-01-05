@@ -392,13 +392,13 @@ sub insert_lapset {
 #
 sub insert_lap {
 
-        my ($tagid, $datestamp, $lapsetid, $laps, $finishms, $startms, $groupms, $lapms, $batteryflag, $corr, $skippedflag) = @_;
+        my ($tagid, $datestamp, $lapsetid, $groupsetid, $laps, $finishms, $startms, $groupnumber, $groupms, $lapms, $batteryflag, $corr, $skippedflag) = @_;
 
-        printf STDERR "INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,battery,correction,skippedflag) 
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-               $datestamp, $lapsetid,$laps,$finishms,$startms,$groupms,$lapms,$batteryflag,$corr,$skippedflag if ($DEBUG);
+        printf STDERR "INSERT INTO laps (datestamp,lapsetid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+               $datestamp, $lapsetid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag,$corr,$skippedflag if ($DEBUG);
 
-        unless ($iLapSth->execute($datestamp, $lapsetid, $laps,$finishms,$startms,$groupms,$lapms,$batteryflag, $corr,$skippedflag)) {
+        unless ($iLapSth->execute($datestamp, $lapsetid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag, $corr,$skippedflag)) {
             printf STDERR "%s - laps\n", $iLapSth->errstr if ($VERBOSE);
         }
 }
@@ -422,8 +422,8 @@ sub do_laps_init {
     $iGroupsetSth = $dbsql->prepare('INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(?,?,?,?,?)');
     $iLapsetSth =   $dbsql->prepare('INSERT INTO lapsets (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid,battery,skippedcount,corrections) 
                                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)');
-    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,lapsetid,lapnumber,finishms,startms,groupms,lapms,battery,correction,skippedflag) 
-                VALUES(?,?,?,?,?,?,?,?,?,?)');
+    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,lapsetid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
 
     $uGroupsetSth = $dbsql->prepare('UPDATE groupsets SET datestamp=?, members=?, lengthms=? WHERE groupsetid=?');
     $uLapsetChipSth=$dbsql->prepare(
@@ -465,6 +465,7 @@ sub do_laps_finish {
     $uGroupsetSth->finish();
     $iLapSth->finish();
     FKey::finish(%UKey);
+    $dbsql->commit();
 }
 
 
@@ -552,8 +553,9 @@ sub do_lap {
 
     # Finally, insert a new lap record.
     #
-    insert_lap($tagid, $datestamp, $LapSetid{$tagid}, $Laps{$tagid}, $finishms, $startms, $groupms, $lapms, $batteryflag, $corr, $skippedflag);
+    insert_lap($tagid, $datestamp, $LapSetid{$tagid}, $GroupSetid, $Laps{$tagid}, $finishms, $startms, $GroupMembers, $groupms, $lapms, $batteryflag, $corr, $skippedflag);
 
+    $dbsql->commit();
 
 }   
 
@@ -791,6 +793,7 @@ sub follow_me_mode {
 
 $dbsql = DBI->connect("dbi:mysql:$DATABASE", $DBUSER, $DBPASSWORD, { 'PrintError' => 0 }) || die "Cannot connect to mysql\n";
 
+$dbsql->{'AutoCommit'} = 0;
 
 
 # File I/O Mode
@@ -804,6 +807,7 @@ if ($#ARGV >= 0) {
 }
 
 follow_me_mode($dbsql);
+#$dbsql->{'AutoCommit'} = 1;
 
 exit();
 
