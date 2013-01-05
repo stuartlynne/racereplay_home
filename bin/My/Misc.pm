@@ -7,7 +7,7 @@ use Exporter;
 use Data::Dumper;
 
 
-use My::FKey qw(init find finish);
+use My::FKey qw(init find finish kph hhmm);
 
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK @EXPORT_TAGS);
 
@@ -213,6 +213,21 @@ sub get_loaner {
     return $chip;
 }
 
+
+
+sub Misc::kph {
+    my ($distance, $ms) = @_;
+    my $kph = (3600/($ms/1000)) * $distance;
+    return sprintf("%5.2f", $kph);
+}
+
+
+sub Misc::hhmm {
+    my ($datestamp) = @_;
+    my @values = split(/ /,$datestamp);
+    my @hhmmss = split(/:/,$values[1]);
+    return sprintf("%s:%s", $hhmmss[0], $hhmmss[1]);
+}
 
 
 
