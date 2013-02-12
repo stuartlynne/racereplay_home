@@ -24,23 +24,28 @@
 #               - if required, create a chip record for the transponder chip used
 #               - this allows unknown transponders to be safely used without prior knowledge
 #
-#       racereplay.health
-#               - create a health record when required
-#
 #       racereplay.groupsets
 #               - create a groupset record when required
 #
 #       racereplay.workouts
 #               - create a workout record when required
 #
+#       racereplay.races
+#               - create a race record when required
+#
+#       racereplay.raceinfo
+#               - create a raceinfo record when required
+#
+#       racereplay.racelaps
+#               - create a racelap record when required
+#
 #
 #       racereplay.laps
 #               - create a lap record
 #               - set fields as needed
 #
-#               - update lapset finishtime, totalms, bestlapms and laps 
+#               - update workout finishtime, totalms, bestlapms and laps 
 #               - update groupset lengthms, gapms and members
-#               - update health activation count, battery flag, skipped count, and corrections 
 #               - update chip activations, replacebattery, batteryreplaced 
 #
 # 
@@ -86,7 +91,7 @@
 #       "startms"       Milli-seconds at the beginning of the lap (if present, may be zero).
 #       "groupms"       Milli-seconds from beginning of group.
 #       "lapms"         Total milli-seconds for recorded lap (may be zero).
-#       "lapnumber"     Lap number withing a set of laps.
+#       "workoutlap"     Lap number within a set of laps.
 #       "groupnumber"   Number withing a group.
 #       "gapms"         Milli-seconds from previous group if first in group.
 #       "skippedflag"   Number of possible skipped laps.
@@ -95,6 +100,7 @@
 
 
 
+my $TRANSACTIONS = 0;
 my $DEBUG = 1;
 my $VERBOSE = 1;
 
@@ -149,11 +155,9 @@ sub dodef0 {
     return 0;
 }
 
-my ($sGroupsetSth, $iGroupsetSth, $uGroupsetSth, $uLapsetChipSth);
-my ($sLapsetSth, $iLapsetSth);
-my $iLapSth;
 
-my (%Health, %Venues, %LapTime, %Lapms, %Laps, %Activations, 
+
+my (%VenueIDs, %VenueDistances, %LapTime, %Lapms, %Laps, %Activations, 
         %LapSetid, %LapTotalms, %LapBestms, %LapCorrections, %LapSkippedCount, %LapBattery);
 
 my %UKey;
@@ -164,81 +168,197 @@ my $GroupMS = 0;
 my $GroupLengthMS = 0;
 my $GroupSetid = 0;
 my $GroupGapMS = 0;
+my $GroupStartMS = 0;
+
+my $LastRX = 0;
+
+my @GroupMembersList;           # current list of riders in a group
+my $GroupMembersLapZero = 0;    # number of riders in current group in lap zero
+
+                                # Indexed by tagid
+my $ActiveRaces = 0;            # number of active races
+my %RacerRaceID;                # current raceid for a tagid
+my %RacerRaceInfoID;            # current raceinfoid for a tagid
+my %ActiveLast;                 # last time tagid seen
+
+                                # Indexed by raceid
+my %RaceInfoIDs;                # current raceinfoid
+my %RaceLapNumber;              # current lapnumber
+my %RacesActiveCount;           # current number of active racers
+my $RaceLapFinishOrder;         # number of finishers in current race lap
+
+my $NextRaceID = 0;
+my $NextRaceInfoID = 0;
+
 
 ######################################################################################################################
 
+
+sub diemsg {
+        my ($line, $msg, $sth) = @_;
+        unless (defined($msg) && defined($sth)) {
+            die sprintf("LINE: %d msg or sth not defined\n", $line);
+        }
+        if (defined($sth)) {
+            if (defined($sth->{'statement'})) {
+                die sprintf("%s(%d):%s\n%s\n", $msg, $line, $sth->errstr, $sth->{'statement'});
+            }
+            else {
+                die sprintf("%s(%d):%s\n", $msg, $line, $sth->errstr);
+            }
+        }
+        die sprintf("%s\nSTH NOT DEFINED\n", $msg);
+}
 
 # get_venueid
 #
 # get or create a venueid
 #
 sub get_venueid {
-    my ($venue) = @_;
-    if (defined($Venues{$venue})) {
-        return $Venues{$venue};
+    my ($dbh, $venue) = @_;
+
+    unless (defined($VenueIDs{$venue})) {
+
+        my $row = Misc::get_venue_info($dbh, $venue);
+
+        unless($row) {
+            die "Cannot find venue! %s\n", $venue;
+        }
+
+        $VenueIDs{$venue} = $row->{'venueid'};
+        $VenueDistances{$venue} = $row->{'distance'};
+
+        printf STDERR "found venue: %s venueid: %d distance: %d\n", $venue, $VenueIDs{$venue}, $VenueDistances{$venue};
     }
-    my $venueid = FKey::find($venue, %UKey);
-    $Venues{$venue} = $venueid;
-    printf STDERR "found venue: %s venueid: %d\n", $venue, $venueid;
-    return $venueid;
+    return ($VenueIDs{$venue}, $VenueDistances{$venue});
 }
 
-# get_healthid
+######################################################################################################################
+
+
+# insert_raceinfo
 #
-# get or create a healthid
+# Create a new race record properly initialized.
 #
-sub get_healthid {
-    my ($dbsql, $tagid, $chipid, $datestamp) = @_;
+my ($sRaceLapSth, $iRaceLapSth, $uRaceSth);
+sub insert_raceinfo {
+    my ($dbsql, $raceid, $trackflag, $startflag, $neutralflag, $finishms, $msg) = @_;
 
-    my @values = split(/ /,$datestamp);
-    my $date = $values[0];
+    #printf STDERR "\n-------------------\n" if ($DEBUG);
+    #printf STDERR "insert_raceinfo - finishms: %s %s\n", $finishms, $msg;
+    #printf STDERR "%%RaceLapNumber - current lapnumber by raceid\n";
+    #printf STDERR Dumper(\%RaceLapNumber);
+    my $lapnumber = $RaceLapNumber{$raceid}++;
 
-    # cached value
-    return $Health{$tagid} if(defined($Health{$tagid}));
+    printf STDERR "INSERT INTO raceinfo (raceid,lapnumber,racelap,finishms) VALUES(%s,%s,%s)\n", $raceid, $lapnumber, $lapnumber, $finishms if ($VERBOSE);
 
-    $Health{$tagid} = Misc::find_healthid($dbsql, $chipid, $date);
-    return $Health{$tagid};
+    $iRaceLapSth =   $dbsql->prepare('INSERT INTO raceinfo  (raceid,lapnumber,racelap,startflag,neutralflag,finishms) VALUES(?,?,?,?,?,?)')
+        unless(defined($iRaceLapSth));
+
+    unless ($iRaceLapSth->execute($raceid, $lapnumber, $lapnumber, $startflag, $neutralflag, $finishms)) {
+        printf STDERR "%s - races\n", $iRaceLapSth->errstr; # if ($VERBOSE);
+    }
+
+    return if ($startflag);
+
+    # get raceinfoid
+    #
+    printf STDERR "SELECT raceinfoid FROM races WHERE raceid=%s\n", $raceid if ($DEBUG);
+    
+    $sRaceLapSth =   $dbsql->prepare('SELECT raceinfoid  FROM raceinfo  WHERE raceid=? AND lapnumber=?') 
+        unless(defined($sRaceLapSth));
+
+    $sRaceLapSth->execute($raceid, $lapnumber) || diemsg(__LINE__, "insert_races: Cannot find raceinfoid:", $sRaceLapSth);
+    my $srow = $sRaceLapSth->fetchrow_hashref();
+
+    unless (defined($srow)) {
+        diemsg(__LINE__, "insert_races: Could not find raceid:", $sRaceLapSth);
+    }
+    my $RaceInfoID = $srow->{'raceinfoid'};
+
+    # reset the appropriate fields associated with this tagid
+    #
+    $RaceInfoIDs{$raceid} = $RaceInfoID;                 # index by raceid, holds current raceinfoid
+    $RaceLapFinishOrder = 0;
+
+
+    # update race
+    my $racelaps = $trackflag ? $lapnumber - 1 : $lapnumber;
+    $uRaceSth = $dbsql->prepare('UPDATE races SET lastlap=?, racelaps=? WHERE raceid=?')
+        unless(defined($uRaceSth));
+
+    $uRaceSth->execute($lapnumber, $racelaps, $raceid) || diemsg(__LINE__, "Could not update race", $uRaceSth);
+
+    printf STDERR "RaceInfoID: %s\n", $RaceInfoID if ($DEBUG);
+}
+
+# insert_race
+#
+# Create a new race record properly initialized.
+#
+my ($sRaceSth, $iRaceSth);
+sub insert_race {
+    my ($dbsql, $trackflag, $groupsetid, $entries, $finishms ) = @_;
+
+    #printf STDERR "\n-------------------\n" if ($DEBUG);
+    printf STDERR "INSERT INTO races (groupsetid,description,racetype,entries,startms) VALUES(%s,\"\",\"\",%s)\n", $groupsetid, $entries, $finishms if ($VERBOSE);
+
+    $iRaceSth = $dbsql->prepare('INSERT INTO races (groupsetid,description,racetype,entries,startms) VALUES(?,"","",?,?)') 
+        unless(defined($iRaceSth));
+
+    unless ($iRaceSth->execute($groupsetid, $entries, $finishms)) {
+        printf STDERR "%s - races\n", $iRaceSth->errstr; # if ($VERBOSE);
+    }
+
+    # get raceid
+    #
+    printf STDERR "SELECT raceid FROM races WHERE groupsetid\n", $groupsetid if ($DEBUG);
+
+    $sRaceSth =      $dbsql->prepare('SELECT raceid FROM races WHERE groupsetid=?')
+        unless(defined($sRaceSth));
+    $sRaceSth->execute($groupsetid) || diemsg(__LINE__, "insert_races: Cannot find racesid", $sRaceSth);
+    my $srow = $sRaceSth->fetchrow_hashref();
+
+    unless (defined($srow)) {
+        diemsg(__LINE__, "insert_races: Could not find racesid", $sRaceSth);
+    }
+    #$sRaceSth->finish();
+    my $RaceID = $srow->{'raceid'};
     
 
-#   # search for it
-#   my $cSth = $dbsql->prepare( "SELECT healthid FROM health WHERE chipid=? AND datestamp=?");
-#   $cSth->execute($chipid, $date) || die "Select from health failed\n";
-#   my $srow = $cSth->fetchrow_hashref();
+    # reset the appropriate fields associated with this tagid
+    #
+    $RaceInfoIDs{$RaceID} = 0;                 # index by raceid, holds current raceinfoid
+    $RacesActiveCount{$RaceID} = 0;           # index by raceid, holds current number of active racers
+    $RaceLapNumber{$RaceID} = 0;              # current lapnumber
 
-#   # found it
-#   if (defined($srow)) {
-#       my $healthid = $srow->{'healthid'};
-#       $Health{$tagid} = $healthid;
-#       return $healthid;
-#   }
+    printf STDERR "RaceID: %s\n", $RaceID if ($DEBUG);
+    
+    insert_raceinfo($dbsql, $RaceID, $trackflag, 1, 0, $finishms, "Start Lap");
 
-#   # insert it
-#   printf STDERR "INSERT INTO health (chipid,datestamp,activations,corrections,skippedcount,battery) VALUES(%s,%s,0,0,0,0)\n", $chipid, $date;
+    for (my $i = 1; $i <= $#GroupMembersList; $i++) {
+        #printf STDERR "GROUP[%2d] %s\n", $i, $GroupMembersList[$i];
+        my $tagid = $GroupMembersList[$i];
+        if (defined($RacerRaceID{$tagid})) {
+        }
+        $RacesActiveCount{$NextRaceID}++;
+        $RacerRaceID{$tagid} = $RaceID;
+    }
 
-#   my $iSth = $dbsql->prepare("INSERT INTO health (chipid,datestamp,activations,corrections,skippedcount,battery) VALUES(?,?,0,0,0,0)");
-#   $iSth->execute($chipid, $date) || die "Failed to insert chipid\n";
-
-#   # now find it
-#   $cSth->execute($chipid, $date) || die "Insert into health failed\n";
-#   $srow = $cSth->fetchrow_hashref();
-#   
-#   unless (defined($srow)) { die "Cannot find health!\n"; }
-
-#   # cache it
-#   my $healthid = $srow->{'heal'};
-#   $Health{$tagid} = $healthid;
-#   return $healthid;
+    $ActiveRaces++;
 }
+
 
 
 ######################################################################################################################
 
-# update_lapset
+# update_workout
 #
-# At the end of a lapset this is called to update lapset information. Note that this also updates
-# the chips and health records for the # appropriate chipid.
+# At the end of a workout this is called to update workout information. Note that this also updates
+# the chips records for the # appropriate chipid.
 #
-sub update_lapset {
+my ($uWorkoutChipSth);
+sub update_workout {
 
     my ($dbsql, $tagid, $chipid) = @_;
 
@@ -254,28 +374,27 @@ sub update_lapset {
         $replacebattery = 1 if (($activations > 20) && ($battery / $activations) < .9);
     }
 
-    printf STDERR "UPDATE workouts l LEFT JOIN chips c ON l.chipid = c.chipid LEFT JOIN health h ON c.chipid = h.chipid SET 
-                l.finishtime=%s, l.laps=%s, l.totalms=%s, l.bestlapms=%s, l.battery=%s, l.skippedcount=%s, l.corrections=%s, 
-                c.currentactivations=c.currentactivations+%s, c.totalactivations=c.totalactivations+%s, c.replacebattery=c.replacebattery OR %d,
-                h.activations=h.activations+%s, h.corrections=h.corrections+%s, h.battery=h.battery+%s, h.skippedcount=h.skippedcount+%s
-                WHERE l.workoutid=%s AND c.chipid=%s AND h.healthid=%s\n",
-
+    printf STDERR "UPDATE workouts w 
+                SET w.finishtime=%s, w.laps=%s, w.totalms=%s, w.bestlapms=%s, w.battery=%s, w.skippedcount=%s, w.corrections=%s
+                WHERE w.workoutid=%s\n",
                 $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, $battery, $LapSkippedCount{$tagid}, $LapCorrections{$tagid},
-                $laps, $laps, $replacebattery, 
-                $activations, $LapCorrections{$tagid}, $battery, $LapSkippedCount{$tagid}, 
-                $LapSetid{$tagid}, $chipid, $Health{$tagid}
-    if ($DEBUG);
+                $LapSetid{$tagid}
+        if ($DEBUG);
 
-    $uLapsetChipSth->execute(
+
+    $uWorkoutChipSth=$dbsql->prepare(
+            'UPDATE workouts w 
+            SET w.finishtime=?, w.laps=?, w.totalms=?, w.bestlapms=?, w.battery=?, w.skippedcount=?, w.corrections=?
+            WHERE w.workoutid=?')
+        unless(defined($uWorkoutChipSth));
+
+    $uWorkoutChipSth->execute(
                 $LapTime{$tagid}, $laps, $LapTotalms{$tagid}, $LapBestms{$tagid}, $battery, $LapSkippedCount{$tagid}, $LapCorrections{$tagid},
-                $laps, $laps, $replacebattery, 
-                $activations, $LapCorrections{$tagid}, $battery, $LapSkippedCount{$tagid}, 
-                $LapSetid{$tagid}, $chipid, $Health{$tagid}
-           ) || die "Could not insert laps\n";
+                $LapSetid{$tagid}
+           ) || diemsg(__LINE__, "Could not update workout", $uWorkoutChipSth);
     
-    $uLapsetChipSth->finish();
-
     # undef everything
+    #
     delete $LapSetid{$tagid};
     delete $LapTime{$tagid};
     delete $Laps{$tagid};
@@ -286,7 +405,6 @@ sub update_lapset {
     delete $LapSkippedCount{$tagid};
     delete $LapBattery{$tagid};
     delete $Activations{$tagid};
-    delete $Health{$tagid};
 }
 
 # update groupset
@@ -294,44 +412,74 @@ sub update_lapset {
 # At the end of a set of activations in a single group this is called to update the groupset 
 # record with the appropriate information.
 #
+my ($sGroupsetSth, $iGroupsetSth, $uGroupsetSth);
 sub update_groupset {
+
+    my ($dbsql, $trackflag, $finishms) = @_;
+
+    #printf STDERR "--------------------------------\n";
+
+    $uGroupsetSth = $dbsql->prepare('UPDATE groupsets SET datestamp=?, members=?, lengthms=? WHERE groupsetid=?')
+        unless(defined($uGroupsetSth));
 
     unless ($GroupMembers == 1) {
         printf STDERR "UPDATE groupsets SET datestamp=%s members=%s lengthms=%s WHERE groupsetid=%s\n",
                $GroupDatestamp, $GroupMembers, $GroupLengthMS, $GroupSetid if ($DEBUG);
 
-        $uGroupsetSth->execute($GroupDatestamp, $GroupMembers, $GroupLengthMS, $GroupSetid) || die "Could not insert groupsets\n";
+        $uGroupsetSth->execute($GroupDatestamp, $GroupMembers, $GroupLengthMS, $GroupSetid) || diemsg(__LINE__, "Could not insert groupsets", $uGroupsetSth);
     }
 
+
+    if (($GroupMembers >= 4) && (($GroupMembersLapZero / $GroupMembers) > .9)) {
+
+        printf STDERR "\n\n---------------------------------------\n";
+        printf STDERR "RACE GroupMembers: %d GroupMembersLapZero: %d percent: %5.2f\n", $GroupMembers, $GroupMembersLapZero, (($GroupMembersLapZero / $GroupMembers) > .9);
+
+        insert_race($dbsql, $trackflag, $GroupSetid, $GroupMembers, $GroupStartMS);
+    }
+
+    $GroupStartMS = 0;
     $GroupDatestamp = "";
     $GroupMembers = 0;
     $GroupLengthMS = 0;
     $GroupSetid = 0;
+
+    $GroupMembersLapZero = 0;
+    @GroupMembersList = ();     
 }
+
+######################################################################################################################
 
 # insert_groupset
 #
 # Create a new groupset record properly initialized.
 #
 sub insert_groupset {
-    my ($venueid, $datestamp, $finishms, $gapms) = @_;
+    my ($dbsql, $venueid, $datestamp, $finishms, $gapms) = @_;
 
-    printf STDERR "INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(%s,%s,1,0,%s)\n", $venueid, $datestamp, $gapms if ($DEBUG);
+    printf STDERR "INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(%s,%s,1,0,%s)\n", $venueid, $datestamp, $gapms if ($VERBOSE);
+
+    $iGroupsetSth =  $dbsql->prepare('INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(?,?,?,?,?)')
+        unless(defined($iGroupsetSth));
 
     unless ($iGroupsetSth->execute($venueid, $datestamp, 1, 0, $gapms)) {
-        printf STDERR "%s - groupsets\n", $iGroupsetSth->errstr if ($VERBOSE);
+        printf STDERR "%s - groupsets\n", $iGroupsetSth->errstr; # if ($VERBOSE);
     }
 
     # get groupsetid
     #
     printf STDERR "SELECT groupsetid FROM groupsets WHERE venueid=%s AND datestamp=%s\n", $venueid, $datestamp if ($DEBUG);
 
-    $sGroupsetSth->execute($venueid, $datestamp) || die "insert_groupset: Cannot find groupsetid\n";
+    $sGroupsetSth =  $dbsql->prepare('SELECT groupsetid FROM groupsets WHERE venueid=? AND datestamp=?')
+        unless(defined($sGroupsetSth));
+
+    $sGroupsetSth->execute($venueid, $datestamp) || diemsg(__LINE__, "insert_groupset: Cannot find groupsetid", $sGroupsetSth);
     my $srow = $sGroupsetSth->fetchrow_hashref();
 
     unless (defined($srow)) {
-        die "insert_groupset: Could not find groupsetid\n";
+        diemsg(__LINE__, "insert_groupset: Could not find groupsetid", $sGroupsetSth);
     }
+    #$sGroupsetSth->finish();
 
     # reset the appropriate fields associated with this tagid
     #
@@ -341,48 +489,71 @@ sub insert_groupset {
     $GroupMS = 0;
     $GroupLengthMS = 0;
     $GroupGapMS = $finishms;
+    $GroupMembersLapZero = 0;
+    @GroupMembersList = ();     
 
-    #printf STDERR "GroupSetid: %s\n", $GroupSetid if ($DEBUG);
+    $GroupStartMS = $finishms;
+
+    printf STDERR "GroupSetid: %s GroupStartMS: %d\n", $GroupSetid, $GroupStartMS if ($DEBUG);
 }
 
 
-# insert_lapset
+# insert_workout
 #
-# Create a new lapset record properly initialized.
+# Create a new workout record properly initialized.
 #
-sub insert_lapset {
-    my ($venueid, $tagid, $chipid, $datestamp, $boxid, $lapms, $startms, $finishms, $groupms) = @_;
+my ($sWorkoutSth, $iWorkoutSth);
+sub insert_workout {
+    my ($dbsql, $venueid, $tagid, $chipid, $datestamp, $boxid, $lapms, $startms, $finishms, $groupms) = @_;
 
     #printf STDERR Dumper(\@_);
 
     printf STDERR "INSERT INTO workouts (venueid,chipid,starttime,finishtime,totalms,laps,boxid,battery,skippedcount,corrections) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)\n",
-           $venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0" if ($DEBUG);
+           $venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0" if ($VERBOSE);
+
+    $iWorkoutSth =   $dbsql->prepare('
+        INSERT INTO workouts  
+        (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid,battery,skippedcount,corrections) 
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+        unless(defined($iWorkoutSth));
+
 
     # may fail if it was previously inserted
     #
-    unless ($iLapsetSth->execute($venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0")) {
-        printf STDERR "%s - workouts\n", $iLapsetSth->errstr if ($VERBOSE);
+    unless ($iWorkoutSth->execute($venueid, $chipid, $datestamp, "", "0", "0", "0", $boxid, "0", "0", "0")) {
+        printf STDERR "%s - workouts\n", $iWorkoutSth->errstr; # if ($VERBOSE);
     }
 
     # get workoutid
     #
-    $sLapsetSth->execute($chipid, $datestamp) || die "Cannot find workoutid\n";
 
-    my $srow = $sLapsetSth->fetchrow_hashref();
+    $sWorkoutSth =   $dbsql->prepare('SELECT workoutid  FROM workouts  WHERE chipid=? AND starttime=?')
+        unless(defined($sWorkoutSth));
 
+    $sWorkoutSth->execute($chipid, $datestamp) || diemsg(__LINE__, "Cannot find workoutid", $sWorkoutSth);
+
+    my $srow = $sWorkoutSth->fetchrow_hashref();
     unless (defined($srow)) {
-        die "Could not find workoutid\n";
+        diemsg(__LINE__, "Could not find workoutid", $sWorkoutSth);
     }
+    #$sWorkoutSth->finish();
 
     # reset the appropriate fields associated with this tagid
     #
     $LapSetid{$tagid} = $srow->{'workoutid'};
-    $Laps{$tagid} = 0;
+    $Laps{$tagid} = -1;
     $Activations{$tagid} = 0;
     $LapBestms{$tagid} = $lapms;
     $LapCorrections{$tagid} = 0;
     $LapSkippedCount{$tagid} = 0;
     $LapBattery{$tagid} = 0;
+
+    # reset old race activity if present
+    #
+    if (defined($RacerRaceID{$tagid})) {
+        delete($RacerRaceID{$tagid}); 
+        $RacesActiveCount{$tagid}++;
+    }
 
 }
 
@@ -390,17 +561,58 @@ sub insert_lapset {
 #
 # Insert the actual per lap data.
 #
+my ($sLapSth, $iLapSth, $iRaceInfoSth);
 sub insert_lap {
 
-        my ($tagid, $datestamp, $workoutid, $groupsetid, $laps, $finishms, $startms, $groupnumber, $groupms, $lapms, $batteryflag, $corr, $skippedflag) = @_;
+    my ($dbsql, $tagid, $datestamp, $workoutid, $groupsetid, $laps, $finishms, $startms, $groupnumber, $groupms, $lapms, $batteryflag, $corr, $skippedflag) = @_;
 
-        printf STDERR "INSERT INTO laps (datestamp,workoutid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-               $datestamp, $workoutid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag,$corr,$skippedflag if ($DEBUG);
+    printf STDERR "INSERT INTO laps (datestamp,workoutid,groupsetid,workoutlap,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
+        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)\n",
+        $datestamp, $workoutid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag,$corr,$skippedflag 
+            if ($DEBUG);
 
-        unless ($iLapSth->execute($datestamp, $workoutid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag, $corr,$skippedflag)) {
-            printf STDERR "%s - laps\n", $iLapSth->errstr if ($VERBOSE);
-        }
+    $iLapSth = $dbsql->prepare(
+            'INSERT INTO laps (datestamp,workoutid,groupsetid,workoutlap,finishms,startms, groupnumber,groupms,lapms,battery,correction,skippedflag) 
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+        unless(defined($iLapSth));
+
+    unless ($iLapSth->execute($datestamp, $workoutid, $groupsetid, $laps,$finishms,$startms,$groupnumber,$groupms,$lapms,$batteryflag, $corr,$skippedflag)) {
+        printf STDERR "insert lap %s\n", $iLapSth->errstr; # if ($VERBOSE);
+    }
+    
+    return unless (defined($RacerRaceID{$tagid}));
+
+    # add racelaps entry if required, lookup the raceinfoid and get the just inserted lapid
+    #
+    my $raceinfoid = $RacerRaceInfoID{$tagid};
+
+    #printf STDERR "%%RacerRaceInfoID\n";
+    #printf STDERR Dumper(%RacerRaceInfoID);
+
+    $sLapSth =  $dbsql->prepare('SELECT * FROM laps WHERE workoutid=? AND datestamp=?')
+        unless(defined($sLapSth));
+
+    $sLapSth->execute($workoutid, $datestamp) || diemsg(__LINE__, "select laps: Cannot find laps:", $sLapSth);
+    my $srow = $sLapSth->fetchrow_hashref();
+
+    unless (defined($srow)) {
+        diemsg(__LINE__, "insert_races: Could not find raceid:", $sLapSth);
+    }
+
+    my $lapid = $srow->{'lapid'};
+        
+    printf STDERR "INSERT INTO racelaps (lapid,raceinfoid)  VALUES(%s,%s)\n", $lapid, $raceinfoid
+        if ($DEBUG);
+
+
+    my $finishorder = ++$RaceLapFinishOrder;
+
+    $iRaceInfoSth = $dbsql->prepare( 'INSERT INTO racelaps (lapid,raceinfoid,finishorder)  VALUES(?,?,?)')
+        unless(defined($iRaceInfoSth));
+
+    unless ($iRaceInfoSth->execute($lapid, $raceinfoid, $finishorder)) {
+        diemsg(__LINE__, "insert raceinfo:", $iRaceInfoSth);
+    }
 }
 
 # do_laps_init
@@ -410,68 +622,57 @@ sub insert_lap {
 sub do_laps_init {
     my ($dbsql) = @_;
 
-    printf STDERR "do_laps_init:\n";
+    #printf STDERR "do_laps_init:\n";
 
     %UKey = FKey::init($dbsql, 'venue');
 
-    # Prepare all of the SQL statements once, this improves performance
-    #
-    $sGroupsetSth = $dbsql->prepare('SELECT groupsetid FROM groupsets WHERE venueid=? AND datestamp=?');
-    $sLapsetSth =   $dbsql->prepare('SELECT workoutid FROM workouts WHERE chipid=? AND starttime=?');
-
-    $iGroupsetSth = $dbsql->prepare('INSERT INTO groupsets (venueid,datestamp,members,lengthms,gapms) VALUES(?,?,?,?,?)');
-    $iLapsetSth =   $dbsql->prepare('INSERT INTO workouts (venueid,chipid,starttime,finishtime,totalms,bestlapms,laps,boxid,battery,skippedcount,corrections) 
-                                                VALUES(?,?,?,?,?,?,?,?,?,?,?)');
-    $iLapSth =      $dbsql->prepare('INSERT INTO laps (datestamp,workoutid,groupsetid,lapnumber,finishms,startms,groupnumber,groupms,lapms,battery,correction,skippedflag) 
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
-
-    $uGroupsetSth = $dbsql->prepare('UPDATE groupsets SET datestamp=?, members=?, lengthms=? WHERE groupsetid=?');
-    $uLapsetChipSth=$dbsql->prepare(
-            'UPDATE workouts l 
-            LEFT JOIN chips c ON l.chipid = c.chipid 
-            LEFT JOIN health h ON c.chipid = h.chipid
-            SET 
-                l.finishtime=?, l.laps=?, l.totalms=?, l.bestlapms=?, l.battery=?, l.skippedcount=?, l.corrections=?, 
-                c.currentactivations=c.currentactivations+?, c.totalactivations=c.totalactivations+?, c.replacebattery=c.replacebattery OR ?,
-                h.activations=h.activations+?, h.corrections=h.corrections+?, h.battery=h.battery+?, h.skippedcount=h.skippedcount+?
-            WHERE 
-                l.workoutid=? AND c.chipid=? AND h.healthid=?');
-
-
 }
+
 # do_laps_finish
 #
 # cleanup
 #
 sub do_laps_finish {
 
-    my ($dbsql) = @_;
+    my ($dbsql, $trackflag) = @_;
+
+    # Update race records
+    #
+    #update_race($dbsql) if ($ActiveRaces);
 
     # Dump last group record. There is only one.
     #
-    update_groupset() if ($GroupDatestamp ne "");
+    update_groupset($dbsql, $trackflag, 0) if ($GroupDatestamp ne "");
 
-    # Update lapset records in progress. There may be many of them.
+    # Update workout records in progress. There may be many of them.
     #
     foreach my $tagid (sort keys(%Lapms)) {
         my $chipid = Misc::find_chipid($dbsql, $tagid);
-        printf STDERR "tagid: %s\n", $chipid;
-        update_lapset($dbsql, $tagid, $chipid);
+        #printf STDERR "tagid: %s\n", $chipid;
+        update_workout($dbsql, $tagid, $chipid);
     }
 
-    $sLapsetSth->finish();
-    $iLapsetSth->finish();
+    $sWorkoutSth->finish();
+    $iWorkoutSth->finish();
     $iGroupsetSth->finish();
     $uGroupsetSth->finish();
     $iLapSth->finish();
     FKey::finish(%UKey);
-    $dbsql->commit();
+    $dbsql->commit() if ($TRANSACTIONS);
 }
 
 
 # These are declared here to improve performance 
 #
-my ($datestamp, $venue, $boxid, $tagid, $finishms, $startms, $groupms, $lapms, $corr, $gapms, $skippedflag, $batteryflag);
+my ($datestamp, $venue, $boxid, $tagid, $finishms, $startms, $groupms, $lapms, $corr, $gapms, $skippedflag, $batteryflag, $raceinfoid, $rx);
+
+
+sub DEF {
+    my ($value) = @_;
+
+    return "UNDEF" unless(defined($value));
+    return $value;
+}
 
 # do_lap
 #
@@ -479,9 +680,11 @@ my ($datestamp, $venue, $boxid, $tagid, $finishms, $startms, $groupms, $lapms, $
 #
 sub do_lap {
 
-    my ($dbsql, $row) = @_;
+    my ($dbsql, $count, $row) = @_;
 
     next unless(defined($row));
+
+    printf STDERR "\n[%d]=========================================\n\n", $count;
 
     # make sure we don't have any undefined values
     foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
@@ -498,44 +701,127 @@ sub do_lap {
     $gapms = $row->{'gapms'};
     $skippedflag = dodef0($row->{'skippedflag'});
     $batteryflag = dodef0($row->{'batt'});
+    $raceinfoid = 0;
+    $rx = $row->{'rx'};
 
-    printf STDERR "%s: %s startms: %s  groupms: %s Group Datestamp: %s Count: %s MS: %s gapms: %s batteryflag: %d skippedflag: %d\n", 
-           $datestamp, $tagid, $startms, $groupms, $GroupDatestamp, $GroupMembers, $GroupMS, $gapms, $batteryflag, $skippedflag if ($DEBUG);
+    my ($date,$time) = split(/ /, $datestamp);
+
+    printf STDERR "%s %s: %s finishms: %s startms: %s  groupms: %s Group Datestamp: %s Count: %s MS: %s gapms: %s batteryflag: %d skippedflag: %d\n", 
+           $date, $datestamp, $tagid, $finishms, $startms, $groupms, $GroupDatestamp, $GroupMembers, $GroupMS, $gapms, $batteryflag, $skippedflag if ($DEBUG);
+
+
+    if ($rx eq $LastRX) {
+        printf STDERR "\nDuplicate RX! LastRX: %s RX: %s\n", $LastRX, $rx;
+        printf STDERR "%s: %s finishms: %s startms: %s  groupms: %s Group Datestamp: %s Count: %s MS: %s gapms: %s batteryflag: %d skippedflag: %d\n", 
+               $datestamp, $tagid, $finishms, $startms, $groupms, $GroupDatestamp, $GroupMembers, $GroupMS, $gapms, $batteryflag, $skippedflag if ($DEBUG);
+        return;
+    }
+
+    $LastRX = $rx;
+
 
     unless(defined($tagid)) { die "Bad Chip value"; }
     unless(defined($venue)) { die "Bad Venue value"; }
 
-    # Find or create a venueid, chipid and healthid
-    #
-    my ($venueid, $maxtime) = get_venueid($venue);
-    my $chipid = Misc::find_chipid($dbsql, $tagid);
-    my $healthid = get_healthid($dbsql, $tagid, $chipid, $datestamp);
+    # Find venueid
+    my ($venueid, $distance) = get_venueid($dbsql, $venue);
 
-    # If this is not a member of the current groupset then update the groupset
+    my $TrackFlag = $distance <= .5;
+
+    # If this is not a member of the current groupset then update the groupset, may do insert_race
     #
-    update_groupset() if ($GroupDatestamp ne "" && $groupms == 0);
+    update_groupset($dbsql, $TrackFlag, $finishms) if ($GroupDatestamp ne "" && $groupms == 0);
 
     # Insert a new groupset record if this is a new group.
     #
-    insert_groupset($venueid, $datestamp, $finishms, $gapms) if ($GroupDatestamp eq "");
+    insert_groupset($dbsql, $venueid, $datestamp, $finishms, $gapms) if ($GroupDatestamp eq "");
 
-    # Update group info
+
+    # Find or create a chipid 
+    #
+    my $chipid = Misc::find_chipid($dbsql, $tagid);
+
+
+
+    # Is there an existing workout for this tag that is not for this workout?
+    # The startms for this record must be the same as the finishms for the most recent record
+    # in the workout. This also updates the chip records.
+    #
+    update_workout($dbsql, $tagid, $chipid) if (defined($Lapms{$tagid}) && ($Lapms{$tagid} ne $startms));
+
+    # Insert a new workout record if this is a new workout. 
+    #
+    insert_workout ($dbsql, $venueid, $tagid, $chipid, $datestamp, $boxid, $lapms, $startms, $finishms, $groupms) unless (defined($Lapms{$tagid}));
+
+    # Update group info (after insert_workout so $Laps{$tagid} is initialized)
     #
     $GroupMembers++;
+    $GroupMembersList[$GroupMembers] = $tagid;
     $GroupLengthMS = $groupms;
 
+    #printf STDERR "%%Laps - current laps for each tagid\n";
+    #printf STDERR Dumper(\%Laps);
+    
+    #printf STDERR "Laps{%s} %d\n", $tagid, $Laps{$tagid};
 
-    # Is there an existing lapset for this tag that is not for this workout?
-    # The startms for this record must be the same as the finishms for the most recent record
-    # in the lapset. This also updates the chip and healthid records.
+    #$GroupMembersLapZero++ unless ($Laps{$tagid});
+    if ($Laps{$tagid} == -1) {
+        $GroupMembersLapZero++;
+        #printf STDERR "tagid: %s laps: %d GroupMembersLapZero: %d\n", $tagid, $Laps{$tagid}, $GroupMembersLapZero;
+    }
+
+    # Update Race info
     #
-    update_lapset($dbsql, $tagid, $chipid) if (defined($Lapms{$tagid}) && ($Lapms{$tagid} ne $startms));
+    if (defined($RacerRaceID{$tagid})) {
 
-    # Insert a new lapset record if this is a new lapset. 
-    #
-    insert_lapset ($venueid, $tagid, $chipid, $datestamp, $boxid, $lapms, $startms, $finishms, $groupms) unless (defined($Lapms{$tagid}));
 
-    # Update lapset info 
+        # get current raceid for this rider
+        #
+        my $raceid = $RacerRaceID{$tagid};
+
+        #printf STDERR "%%RacerRaceID - current raceid's for all tags\n";
+        #printf STDERR Dumper(\%RacerRaceID);
+
+        #printf STDERR "%%RaceInfoIDs - current raceinfoid for each race\n";
+        #printf STDERR Dumper(\%RaceInfoIDs);
+        #printf STDERR "%%RaceLapNumber - current racelap for each race\n";
+        #printf STDERR Dumper(\%RaceLapNumber);
+
+        #printf STDERR "tagid: %s\n", $tagid;
+        #printf STDERR "RaceID: %s\n", $raceid;
+
+        #printf STDERR "RacerRaceID{%s} %s\n", $tagid, DEF($RacerRaceID{$tagid});
+        #printf STDERR "RacerRaceInfoID{%s} %s\n", $tagid, DEF($RacerRaceInfoID{$tagid});
+        #printf STDERR "RaceInfoIDs{%s} %s\n", $raceid, DEF($RaceInfoIDs{$raceid});
+        #printf STDERR "RaceLapNumber{%s} %s\n", $raceid, DEF($RaceLapNumber{$raceid});
+
+        # do we need to create a racelap record
+        #my $neutralflag = $distance == .2;
+        my $neutralflag = 0;
+        insert_raceinfo($dbsql, $raceid, $TrackFlag, 0, $neutralflag, $finishms, "First Lap") 
+            if(!defined($RaceInfoIDs{$raceid}) || ($RaceInfoIDs{$raceid} == 0));
+        
+
+        # check if there is an existing raceinfoid for this rider and if it is the same as the current
+        # raceinfoid then we allocate a new one.
+        #
+        insert_raceinfo($dbsql, $raceid, $TrackFlag, 0, 0, $finishms, "New Lap") 
+            if (defined($RacerRaceInfoID{$tagid}) && ($RacerRaceInfoID{$tagid} == $RaceInfoIDs{$raceid}));
+
+        #printf STDERR "%%RaceInfoIDs - current raceinfoid for each race\n";
+        #printf STDERR Dumper(\%RaceInfoIDs);
+
+        $raceinfoid = $RaceInfoIDs{$raceid};
+        $RacerRaceInfoID{$tagid} = $raceinfoid;
+        
+        #printf STDERR "%%RacerRaceInfoID - current raceinfoid for each tagid\n";
+        #printf STDERR Dumper(\%RacerRaceInfoID);
+        
+        #printf STDERR "RACER RaceID: %s RaceInfoID: %s\n", $raceid, $raceinfoid;
+    }
+
+
+    # Update workout info 
     #
     $LapTime{$tagid} = $datestamp;
     $Lapms{$tagid} = $finishms;
@@ -545,17 +831,20 @@ sub do_lap {
     # Update lap info
     #
     $Activations{$tagid}++;
-    $Laps{$tagid}++ if ($startms > 0);
+    #$Laps{$tagid}++ if ($startms > 0);
+    $Laps{$tagid}++;
     $LapTotalms{$tagid} += $lapms;
     $LapCorrections{$tagid} += $corr;
     $LapSkippedCount{$tagid} += $skippedflag;
     $LapBattery{$tagid} += $batteryflag;
+    $ActiveLast{$tagid} = $finishms;
 
     # Finally, insert a new lap record.
     #
-    insert_lap($tagid, $datestamp, $LapSetid{$tagid}, $GroupSetid, $Laps{$tagid}, $finishms, $startms, $GroupMembers, $groupms, $lapms, $batteryflag, $corr, $skippedflag);
+    insert_lap($dbsql, $tagid, $datestamp, $LapSetid{$tagid}, $GroupSetid, 
+            $Laps{$tagid}, $finishms, $startms, $GroupMembers, $groupms, $lapms, $batteryflag, $corr, $skippedflag);
 
-    $dbsql->commit();
+    $dbsql->commit() if ($TRANSACTIONS);
 
 }   
 
@@ -571,6 +860,7 @@ sub file_io_mode {
     # iterate across all files specified as arguements
     #
     my $firstflag = 1;
+    my $count = 0;
     while (<ARGV>) {
 
         my $row;
@@ -593,18 +883,18 @@ sub file_io_mode {
         #print STDERR Dumper($row);
 
         unless (defined($row) && $row != 0) {
-            printf STDERR "Empty row skipped\n";
+            #printf STDERR "Empty row skipped\n";
             next;
         }
 
-        do_lap($dbsql, $row);
+        do_lap($dbsql, $count++, $row);
 
         # dump at the end of each file
         #
         if (eof(ARGV)) {
-            printf STDERR "---------\n";
+            #printf STDERR "---------\n";
             $firstflag = 1;
-            do_laps_finish($dbsql);
+            do_laps_finish($dbsql, 0);
         }
     }
     #delete($rcsv);
@@ -654,7 +944,7 @@ sub newfile {
         my $loginfo = sprintf("lapd: terminating", $newfilename);
         syslog('warning', $loginfo);
         printf STDERR "%s\n", $loginfo;
-        do_laps_finish($dbsql);
+        do_laps_finish($dbsql, 0);
         exit();
     }
 
@@ -720,7 +1010,7 @@ sub follow_me_mode {
 
     my $rcsv = SimpleCSV::init('test');
 
-
+    my $count = 0;
     while (defined($line = $file->read())) {
 
         printf STDERR "\n\n%s", $line;
@@ -737,7 +1027,7 @@ sub follow_me_mode {
                 my $loginfo = sprintf("lapd: Closing %sd, Opening File: %s", $currentfilename, $newfilename);
                 syslog('warning', $loginfo);
                 printf STDERR "%s\n", $loginfo;
-                do_laps_finish($dbsql);
+                do_laps_finish($dbsql, 0);
             }
             else {
                 my $loginfo = sprintf("lapd: Opening File: %s", $newfilename);
@@ -758,7 +1048,7 @@ sub follow_me_mode {
             my $loginfo = sprintf("lapd: restarting", $newfilename);
             syslog('warning', $loginfo);
             printf STDERR "%s\n", $loginfo;
-            do_laps_finish($dbsql);
+            do_laps_finish($dbsql, 0);
             #delete($rcscv);
             #simple_csv_finish($rcscv);
             do_laps_init($dbsql);
@@ -783,7 +1073,7 @@ sub follow_me_mode {
 
         # Process it
         #
-        do_lap($dbsql, $row);
+        do_lap($dbsql, $count++, $row);
     }
 }
 
@@ -793,7 +1083,7 @@ sub follow_me_mode {
 
 $dbsql = DBI->connect("dbi:mysql:$DATABASE", $DBUSER, $DBPASSWORD, { 'PrintError' => 0 }) || die "Cannot connect to mysql\n";
 
-$dbsql->{'AutoCommit'} = 0;
+$dbsql->{'AutoCommit'} = 0 if ($TRANSACTIONS);
 
 
 # File I/O Mode
