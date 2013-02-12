@@ -151,13 +151,15 @@ sub do_page {
 #
 sub do_analyze_races {
 
-    my ($dbh, $cgi, $venueid, $eventid, $groupsetid, $maxlaps, $racetype, $sprint, $action) = @_;
+    my ($dbh, $cgi, $venueid, $eventid, $groupsetid, $correction, $maxlaps, $racetype, $sprint, $action) = @_;
 
     $racetype = "Lap Race" unless(defined($racetype));
     $action = "" unless(defined($action));
     $sprint = '10' unless(defined($sprint));
 
-    printf STDERR "do_event: venueid: %s eventid: %s action: %s\n", $venueid, $eventid, $action if ($DEBUG);
+    printf STDERR "do_event: venueid: %s eventid: %s action: %s correction: %s\n", $venueid, $eventid, $action, 
+           defined($correction) ?  $correction : "UNDEF"
+               if ($DEBUG);
     
     my $sth = $dbh->prepare("SELECT * 
             FROM events e
@@ -174,7 +176,7 @@ sub do_analyze_races {
     printf STDERR Dumper($row);
 
     my $description = $row->{'e.description'};
-    my $distance = $row->{'v.distance'};
+    my $distance = $row->{'distance'};
     my $datestamp = $row->{'datestamp'};
 
     printf STDERR "Action: %s\n", $action;
@@ -188,7 +190,6 @@ sub do_analyze_races {
             $cgi->hidden('venueid', $venueid),
             $cgi->hidden('eventid', $eventid),
             $cgi->hidden('groupsetid', $groupsetid),
-            #$cgi->hidden('maxlaps', $maxlaps),
             );
 
     my $workoutcount = 0;
@@ -201,15 +202,39 @@ sub do_analyze_races {
 
     my $lapcorrection = 0;
 
-    #    printf STDERR "-------------------------------------------------\n";
-    #    printf STDERR "do_analyze_races: key: %s groupsetid: %s maxlaps: %s lapcorrection: %s\n", $key, $groupsetid, $maxlaps, $lapcorrection;
-
-    push(@Content, Race::do_analysis($dbh, $cgi, $groupsetid, $maxlaps, $datestamp, $racetype, $sprint)) ;
+    push(@Content, Race::do_analysis($dbh, $cgi, $groupsetid, $distance, $correction, $maxlaps, $datestamp, $racetype, $sprint)) ;
 
     #my ($dbh, $cgi, $reportcount, $reference_groupsetid, $reference_workoutid, $MaxLap, $LapCorrection) = @_;
 
-    my %CorrectionLabels = ( '-2' => 'Down 2', '-1' => 'Down 1', '0' => '0', '1' => 'Up 1', '2' => 'Up 2' );
-    my @CorrectionValues = [-2, -1, 0, 1, 2];
+    my %CorrectionLabels;
+    my @CorrectionValues;
+
+    unless (defined($correction)) {
+        %CorrectionLabels = ( '-2' => 'Down 2', '-1' => 'Down 1', '0' => '0', '1' => 'Up 1', '2' => 'Up 2' );
+        @CorrectionValues = [-2, -1, 0, 1, 2];
+    }
+    else {
+        my @Values;
+        for (my $i = ($correction - 3) ; $i <= ($correction + 3); $i++) {
+            if ($i < 0) {
+                $CorrectionLabels{sprintf("%d", $i)} = sprintf("Down %d", -$i);
+            } elsif ($i > 0) {
+                $CorrectionLabels{sprintf("%d", $i)} = sprintf("Up %d", $i);
+            }
+            else {
+                $CorrectionLabels{"0"} = "0";
+            }
+            push(@Values, $i);
+        }
+        push(@CorrectionValues, \@Values);
+    }
+
+
+    printf STDERR "CorrectionLabels\n";
+    printf STDERR Dumper(\%CorrectionLabels);
+    printf STDERR "CorrectionValues\n";
+    printf STDERR Dumper(\@CorrectionValues);
+         
 
     my %SprintLabels = ( '10' => '10 laps', '12' => '12 laps', '20' => '20 laps', '8' => '8 laps', '5' => '5 laps', '3' => '3 laps', '2' => '2 laps' );
     my @SprintValues = [10, 12, 20, 8, 5, 3, 2];
@@ -254,6 +279,7 @@ sub do_analyze_races {
                         -name => "correction", 
                         -values =>  @CorrectionValues,
                         -default => '0',
+                        -selected => '0',
                         -linebreak => 'true',
                         -labels => \%CorrectionLabels,
                         -columns=>2
@@ -270,7 +296,6 @@ sub do_analyze_races {
                     ]),
                 ),
             $cgi->end_table(),
-            $cgi->hidden('maxlaps', $maxlaps),
             $cgi->end_form(),
             );
 
@@ -322,8 +347,12 @@ sub do_work {
     #
     if ( defined(param('venueid')) && defined(param('eventid')) && defined(param('groupsetid') )) {
 
+        my $correction;
+        if (defined(param('correction'))) {
+            $correction = param('correction');
+        }
         return do_analyze_races($dbh, $cgi, param('venueid'), param('eventid'), param('groupsetid') , 
-                param('maxlaps'), param('racetype'), param('sprint'), param('action'),
+                $correction,param('maxlaps'), param('racetype'), param('sprint'), param('action'),
                 );
     }
 
