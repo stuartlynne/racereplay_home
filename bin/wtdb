@@ -64,8 +64,10 @@
 use strict;
 use warnings;
 
+my $DEBUG = 1;
 
-my $TZ = 'PST8PDT';
+#my $TZ = 'PST8PDT';
+my $TZ = 'UTC';
 
 use DBI;
 use CGI ':standard';
@@ -154,7 +156,7 @@ sub get_active_venue {
     }
 
     unless(defined($row_ref->{'venue'})) {
-        printf STDERR "No active venue\n";
+        printf STDERR "No venue field\n";
         return "novenue";
     }
     
@@ -166,6 +168,7 @@ sub get_venue_info {
     my ($active) = @_;
 
     my $sql = sprintf ( "SELECT * FROM venues where Venue = '%s'", $active);
+    #printf STDERR "%s\n", $sql;
     my $sth = $dbh->prepare($sql);;
     $sth->execute() || die "Execute failed\n";
     
@@ -173,12 +176,11 @@ sub get_venue_info {
     $sth->finish();
 
     unless(defined($row_ref)) {
-        printf STDERR "No active venue\n";
+        printf STDERR "Cannot find active: %s\n", $active;
         return;
     }
 
     unless(defined($row_ref->{'venue'})) {
-        printf STDERR "No active venue\n";
         return "novenue";
     }
     
@@ -270,7 +272,7 @@ sub openfout {
         $firstflag = 1;
         $NextRX = 0;
     }
-    printf STDERR "PREV %s NextRX: %s firstflag: %d\n", $filename, $NextRX, $firstflag;
+    printf STDERR "PREV %s NextRX: %s firstflag: %d\n", $filename, $NextRX, $firstflag if ($DEBUG);
 
     $filename = sprintf(">>lapd-%s-%s.csv", $venuename, $datestamp);
     open (FOUT, $filename) || die "Cannot open $filename\n";
@@ -324,11 +326,9 @@ my %TotalCountedLaps;
 
 my $CurrentEvent = "";
 
-sub process {
+sub do_process {
 
-    my ($csv, $line, $count, $organizer, $distance, $mintime, $maxtime, $gaptime, $venuename, $tz) = @_;
-
-    my $date_format = new DateTime::Format::Strptime( pattern => '%F %T', time_zone => $tz,);
+    my ($csv, $line, $distance, $mintime, $maxtime, $gaptime, $venuename, $date_format) = @_;
 
     my $skippedflag = 0;
 
@@ -354,14 +354,11 @@ sub process {
     $hhmmss =~ s/\./:/g;
     my $timestamp = "$date $hhmmss";
 
-    printf STDERR "timestamp: %s\n", $timestamp;
+    #printf STDERR "timestamp: %s\n", $timestamp;
 
     my $dt = $date_format->parse_datetime($timestamp) || die $DateTime::Format::Strptime::errmsg;
-    if ($TZ ne $tz) {
-        $dt->set_time_zone($TZ);
-        $timestamp = $dt->strftime("%Y-%m-%d %H:%M:%S");
-    }
-    printf STDERR "timestamp: %s\n", $timestamp;
+    $timestamp = $dt->strftime("%Y-%m-%d %H:%M:%S");
+    #printf STDERR "timestamp: %s\n", $timestamp;
 
 
     # 
@@ -374,7 +371,6 @@ sub process {
         undef %LapNumber;
         $GroupStartMS = 0;
     }
-
 
     # get event and rx
     #
@@ -426,16 +422,16 @@ sub process {
         # see lapd-BVCTrack Oct 26, t025EB2 10.92 at about 19:55
         #
         #
-        if ($distance eq ".2") {
+        if ($distance < .5) {
             if ($lapMS > (4*$maxtime)) {
-                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO SLOW > %4.1f\n", 
+                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO SLOW > %4.1f TRACK\n", 
                        $timestamp, $tagid, $MS/1000, $lastMS/1000, $lapMS/1000, $maxtime/1000;
                 $lastMS = 0;
                 $lapMS = 0;
                 $LapNumber{$tagid} = 0;
             }
             elsif ($lapMS > ($maxtime)) {
-                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO SLOW > %4.1f POSSIBLY MISSING LAPS\n", 
+                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO SLOW > %4.1f POSSIBLY MISSING LAPS TRACK\n", 
                        $timestamp, $tagid, $MS/1000, $lastMS/1000, $lapMS/1000, $maxtime/1000;
                 #$MissingLaps{join("-", $tagid, $filedate)}++;
                 $MissingLaps{$tagid}++;
@@ -443,14 +439,14 @@ sub process {
                 $skippedflag++;
             }
             elsif ($lapMS < $mintime) {
-                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO FAST < %4.1f\n", 
+                printf STDERR "%s %s: MS: %4.1f - %4.1f  = %4.1f TOO FAST < %4.1f TRACK\n", 
                        $timestamp, $tagid, $MS/1000, $lastMS/1000, $lapMS/1000, $mintime/1000;
                 $lastMS = 0;
                 $lapMS = 0;
                 $LapNumber{$tagid} = 0;
             }
             else {
-                #printf STDERR "%s %s: MS: %4.1f - %4.1f %4.1f\n", $timestamp, $tagid, $MS, $lastMS, $lapMS;
+                printf STDERR "%s %s: MS: %4.1f - %4.1f %4.1f TRACK\n", $timestamp, $tagid, $MS, $lastMS, $lapMS if ($DEBUG);
             }
         }
         else {
@@ -467,7 +463,7 @@ sub process {
                 $LapNumber{$tagid} = 0;
             }
             else {
-                #printf STDERR "%s %s: MS: %4.1f - %4.1f %4.1f\n", $timestamp, $tagid, $MS, $lastMS, $lapMS;
+                printf STDERR "%s %s: MS: %4.1f - %4.1f %4.1f\n", $timestamp, $tagid, $MS, $lastMS, $lapMS if ($DEBUG);
             }
         }
 
@@ -496,7 +492,7 @@ sub process {
     #
     my $gapms = 0;
     unless ($GroupStartMS) {
-        #printf STDERR "%s: GroupStartMS: ZERO %d\n", $tagid, $groupMS;
+        printf STDERR "%s: GroupStartMS: ZERO %d\n", $tagid, $groupMS if ($DEBUG);
         $GroupStartMS = $MS;
         $GroupLastMS = $MS;
         $groupMS = 0;
@@ -509,7 +505,7 @@ sub process {
         $gapms = $MS - $GroupLastMS;
 
         if ($gapms > $gaptime) {
-            #printf STDERR "%s: GroupStartMS: %d %d too large > %d\n", $tagid, $GroupStartMS, $MS, $gaptime;
+            printf STDERR "%s: GroupStartMS: %d %d too large > %d\n", $tagid, $GroupStartMS, $MS, $gaptime if ($DEBUG);
 
             if ($gapms > $maxtime) {
                 $gapms = 0;
@@ -524,10 +520,13 @@ sub process {
         #
         else {
             $groupMS = $MS - $GroupStartMS;
+
+            # ensure that groupMS is non-zero
+            $groupMS++ unless($groupMS);
             $GroupLastMS = $MS;
             $GroupNumber++;
             $gapms = 0;
-            #printf STDERR "%s: GroupStartMS: %d %d < gap: %d\n", $tagid, $GroupStartMS, $MS, $groupMS;
+            printf STDERR "%s: GroupStartMS: %d %d < gap: %d\n", $tagid, $GroupStartMS, $MS, $groupMS if ($DEBUG);
         }
     }
 
@@ -577,24 +576,28 @@ sub do_fileio {
     my $mintime = 0;
     my $maxtime = 0;
     my $gaptime = 0;
-    my $tz = "PST8PDT";
+    my $ltz = "PST8PDT";
     if ($Venue_ref) {
         $organizer = $Venue_ref->{'organizer'};
         $distance = $Venue_ref->{'distance'};
         $minspeed = $Venue_ref->{'minspeed'};
         $maxspeed = $Venue_ref->{'maxspeed'};
-        $tz = $Venue_ref->{'tz'};
+        $ltz = $Venue_ref->{'timezone'};
         $gaptime = $Venue_ref->{'gaptime'} * 1000;
         $mintime = dist2ms($distance, $maxspeed);
         $maxtime = dist2ms($distance, $minspeed);
     }
-    $tz = "UTC";
+    printf STDERR "Distance: %s\n", $distance;
+    $ltz = "UTC";
+
+    my $date_format = new DateTime::Format::Strptime( pattern => '%F %T', time_zone => $ltz,);
 
     #open(FOUT, ">&STDOUT");
     my $count = 0;
     while (<STDIN>) {
         my $firstflag = $count == 0;
-        process($csv, $_, $count++, $organizer, $distance, $mintime, $maxtime, $gaptime, $venuename, $tz);
+        $count++;
+        do_process($csv, $_, $distance, $mintime, $maxtime, $gaptime, $venuename, $date_format);
         last if ($RestartFlag);
     }
 
@@ -602,9 +605,11 @@ sub do_fileio {
 
 sub do_io {
 
-    my ($csv, $skt) = @_;
+    my ($csv, $skt, $venuename) = @_;
 
-    my $venuename = get_active_venue();
+    printf STDERR "venuename: %s\n", $venuename;
+
+    #my $venuename = get_active_venue();
     my $Venue = get_venue_info($VenueName);
     my $Venue_ref = get_venue_info($venuename);
 
@@ -615,22 +620,25 @@ sub do_io {
     my $mintime = 0;
     my $maxtime = 0;
     my $gaptime = 0;
-    my $tz = "";
+    my $ltz = "";
     if ($Venue_ref) {
         $organizer = $Venue_ref->{'organizer'};
         $distance = $Venue_ref->{'distance'};
         $minspeed = $Venue_ref->{'minspeed'};
         $maxspeed = $Venue_ref->{'maxspeed'};
-        $tz = $Venue_ref->{'tz'};
+        $ltz = $Venue_ref->{'timezone'};
         $gaptime = $Venue_ref->{'gaptime'} * 1000;
         $mintime = dist2ms($distance, $maxspeed);
         $maxtime = dist2ms($distance, $minspeed);
     }
 
+    my $date_format = new DateTime::Format::Strptime( pattern => '%F %T', time_zone => $ltz,);
+
     $RestartFlag = 0;
     my $count = 0;
     while (<$skt>) {
-        process($csv, $_, $count++, $organizer, $distance, $mintime, $maxtime, $gaptime, $venuename, $tz);
+        $count++;
+        do_process($csv, $_, $distance, $mintime, $maxtime, $gaptime, $venuename, $date_format);
         last if ($RestartFlag);
     }
 
@@ -706,6 +714,8 @@ elsif ($#ARGV == 1) {
 # servermode = 1
 else {
     $ServerMode = 1;
+    $VenueName = $ARGV[0];
+    shift @ARGV || die usage;
     $IPAddress = $ARGV[0];
     shift @ARGV || die usage;
     $Port = $ARGV[0];
@@ -725,26 +735,26 @@ else {
     }
 }
 
-
-
 my $socketcount = 0;
-my $Directory = "/var/racereplay";
+#my $Directory = "/var/racereplay";
+my $Directory = ".";
 
 $dbh = DBI->connect("dbi:CSV:f_dir=$Directory;csv_eol=\n;");
 $dbh->{'AutoCommit'} = 1;       # CSV does not support transactions
 $dbh->{'RaiseError'} = 1;
-$dbh->{'csv_tables' }->{'organizers'} = {'file' => 'organizers.csv'};
+#$dbh->{'csv_tables' }->{'organizers'} = {'file' => 'organizers.csv'};
 $dbh->{'csv_tables' }->{'venues'} = {'file' => 'venues.csv'};
-$dbh->{'csv_tables' }->{'users'} = {'file' => 'users.csv'};
+#$dbh->{'csv_tables' }->{'users'} = {'file' => 'users.csv'};
 
-my $csv = Text::CSV->new({ binary=> 1, eol => $/ });
+my $CSV = Text::CSV->new({ binary=> 1, eol => $/ });
 
 
 # FileMode
 # Just process a single file and exit
 #
 unless ($ServerMode) {
-    do_fileio($csv, $VenueName);
+
+    do_fileio($CSV, $VenueName);
 
     printf STDERR "\nCorrections and Missing laps report - by tag\n";
 
@@ -789,6 +799,8 @@ while(1) {
             'PeerPort' => $Port, 
             'Proto' => 'tcp');
 
+    printf STDERR "%s:%s\n", $IPAddress, $Port;
+
     # did we get a connection?
     #
     unless (defined($skt)) {
@@ -825,7 +837,7 @@ while(1) {
 
         # process data on this socket
         #
-        do_io($csv, $skt);
+        do_io($CSV, $skt, $VenueName);
     };
 
     # short delay to prevent runaway connection attempts
