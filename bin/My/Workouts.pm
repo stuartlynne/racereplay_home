@@ -72,6 +72,7 @@ sub Workouts::do_summary_workouts {
             $FinishTime{$key} = $row->{'finishtime'};
             $BestLapMS{$key} = $row->{'bestlapms'};
             $ChipName{$key} = $Chips{$chipid};
+            #$ChipName{$key} = $Chips{$chipid};
             $ChipIDs{$key} = $chipid;
             $UserName{$key} = $name;
             $ReplaceBattery{$key} = $row->{'replacebattery'};
@@ -203,39 +204,27 @@ sub Workouts::do_summary_races {
     my $total = 0;
 
     my $sth = $dbh->prepare("
-            SELECT g.groupsetid, g.members, l.lapnumber, g.datestamp, l.workoutid
-            FROM groupsets g 
-            JOIN events e ON e.venueid = g.venueid
-            JOIN laps l ON l.groupsetid = g.groupsetid
-            JOIN workouts s ON l.workoutid = s.workoutid
-            WHERE 
-                g.datestamp BETWEEN e.starttime AND e.finishtime 
-                AND e.eventid = ? 
-                AND l.lapnumber = 0
-                and g.members > 3
+            SELECT R.raceid, R.entries, R.lastlap, G.datestamp, G.groupsetid
+            FROM races R
+            JOIN events E ON E.eventid = ?
+            JOIN groupsets G on G.groupsetid = R.groupsetid
+            WHERE G.datestamp BETWEEN E.starttime AND E.finishtime
+            ORDER by G.datestamp
             ");
 
-    $sth->execute($eventid) || die "Execute failed\n";
+    $sth->execute($eventid) || die sprintf("Execute failed: %s\n", $sth->errstr);
 
-    my $count = 0;
-    my %GroupSetCount;
-    my %GroupSetDateStamp;
-    my %GroupSetMembers;
+    my @Races;
+
     while ( my $row = $sth->fetchrow_hashref()) {
+        push (@Races, $row);
         printf STDERR Dumper($row);
-
-        my $groupsetid = $row->{'groupsetid'};
-
-        unless (defined($GroupSetMembers{$groupsetid})) {
-            $GroupSetDateStamp{$groupsetid} = $row->{'datestamp'};
-            $GroupSetMembers{$groupsetid} = $row->{'members'};
-            $GroupSetCount{$groupsetid} = 0;
-        }
-        $GroupSetCount{$groupsetid}++;
     }
     $sth->finish();
 
     my @Content = ();
+
+    return @Content unless($#Races);
 
     push(@Content,
 
@@ -253,108 +242,30 @@ sub Workouts::do_summary_races {
                     ])),
         );
 
-
-    my %MaxLaps;
     my $count = 0;
-    foreach my $key (sort keys(%GroupSetMembers)) {
-        printf STDERR "groupsetid: %s members: %d count: %d\n", $key, $GroupSetMembers{$key}, $GroupSetCount{$key};
+    for (my $i = 0; $i <= $#Races; $i++) {
 
-        next unless ($GroupSetCount{$key} >= ($GroupSetMembers{$key} - 1));
-        next unless ($GroupSetMembers{$key} > 3);
+        my $row = $Races[$i];
+        printf STDERR Dumper($row);
 
-#       my $sthn = $dbh->prepare("
-#               SELECT MAX(L.lapnumber) MAXLAP, L.workoutid
-#               FROM laps L0
-#               JOIN workouts S ON L0.workoutid = S.workoutid 
-#               JOIN laps L ON L.workoutid = S.workoutid
-#               WHERE L0.groupsetid = ?
-#               ");
-#
-#       $sthn->execute($key) || die "Execute failed\n";
-#       my $row = $sthn->fetchrow_hashref();
-#       $sthn->finish();
-#       $MaxLaps{$key} = $row->{'MAXLAP'};
-#       next unless ($MaxLaps{$key} > 5);
-
-        my $sthn = $dbh->prepare("
-                SELECT S.laps
-                FROM laps L
-                JOIN workouts S ON L.workoutid = S.workoutid 
-                HERE L.groupsetid = ?
-                ");
-
-        $sthn->execute($key) || die "Execute failed\n";
-        my %allmaxlaps;
-        while (my $row = $sthn->fetchrow_hashref()) {
-
-            #printf STDERR Dumper($row);
-            my $maxlaps = $row->{'laps'};
-            #next unless ($maxlaps > 5);
-            $allmaxlaps{$maxlaps}++;
-            printf STDERR "MAXLAP: %d %d\n", $maxlaps, $allmaxlaps{$maxlaps};
-        }
-        $sthn->finish();
-
-        my $maxlapcount = 0;
-        foreach my $akey (sort keys(%allmaxlaps)) {
-            printf STDERR "allmaxlaps{%s} %d\n", $akey, $allmaxlaps{$akey};
-            next if ($maxlapcount >= $allmaxlaps{$akey});
-            $MaxLaps{$key} = $akey;
-            $maxlapcount = $allmaxlaps{$akey};
-        }
+    
+        my $datestamp = $row->{'datestamp'};
+        my $groupsetid = $row->{'groupsetid'};
+        my $raceid = $row->{'raceid'};
+        my $lastlap = $row->{'lastlap'};
+        my $entries = $row->{'entries'};
 
 
-
-        my %CorrectionLabels = ( '-2' => 'Down 2', '-1' => 'Down 1', '0' => '0', '1' => 'Up 1', '2' => 'Up 2' );
-        my @CorrectionValues = [-2, -1, 0, 1, 2];
-
-        my %SprintLabels = ( '10' => '10 laps', '12' => '12 laps', '8' => '8 laps', '5' => '5 laps', '3' => '3 laps', '2' => '2 laps' );
-        my @SprintValues = [10, 12, 8, 5, 3, 2];
-
-        my %RaceTypeLabels = ( 
-                'Lap Race' => 'Lap Race', 
-                'Points Race' => 'Points Race', 
-                'Scratch Race' => 'Scratch Race', 
-                'Elimination Race' => 'Elimination Race', 
-                );
-        my @RaceTypeValues = ['Lap Race', 'Points Race', 'Scratch Race', 'Elimination Race'];
-
-        my $datestamp = $GroupSetDateStamp{$key};
         $datestamp =~ s/.* //;
+
         my $tr_class = ($count++ % 2) ? 'tr_odd' : 'tr_even';
         push(@Content,
             $cgi->Tr({ -class => $tr_class, -align => "CENTER", -valign => "BOTTOM" },
                 $cgi->td([
-                        $cgi->a({ href => sprintf("/race.pl?venueid=%d&eventid=%d&groupsetid=%d&maxlaps=%d", 
-                                $venueid, $eventid, $key, $MaxLaps{$key}),},$datestamp),
-                        $GroupSetMembers{$key}, 
-                        #$GroupSetCount{$key},
-                        $MaxLaps{$key}, 
- #                       $cgi->checkbox(sprintf("race-%s", $key),0, $key,""),
- #                      $cgi->popup_menu(
- #                          -name => sprintf("correction-%s", $key),
- #                          -values =>  @CorrectionValues,
- #                          -default => '0',
- #                          -linebreak => 'true',
- #                          -labels => \%CorrectionLabels,
- #                          -columns=>2
- #                          ),
- #                      $cgi->popup_menu(
- #                          -name => sprintf("racetype-%s", $key),
- #                          -values =>  @RaceTypeValues,
- #                          -default => '0',
- #                          -linebreak => 'true',
- #                          -labels => \%RaceTypeLabels,
- #                          -columns=>2
- #                          ),
- #                      $cgi->popup_menu(
- #                          -name => sprintf("sprint-%s", $key),
- #                          -values =>  @SprintValues,
- #                          -default => '0',
- #                          -linebreak => 'true',
- #                          -labels => \%SprintLabels,
- #                          -columns=>2
- #                          ),
+                        $cgi->a({ href => sprintf("/race.pl?venueid=%d&eventid=%d&groupsetid=%d&raceid=%d&maxlaps=%d", 
+                                $venueid, $eventid, $groupsetid, $raceid, $lastlap),},$datestamp),
+                        $entries, 
+                        $lastlap, 
                        ]
                     )
                 )
@@ -364,25 +275,16 @@ sub Workouts::do_summary_races {
             $cgi->end_table(),
         );
 
-    foreach my $key (sort keys(%GroupSetMembers)) {
-        printf STDERR "groupsetid: %s members: %d count: %d\n", $key, $GroupSetMembers{$key}, $GroupSetCount{$key};
-
-        next unless ($GroupSetCount{$key} >= ($GroupSetMembers{$key} - 1));
-        next unless ($GroupSetMembers{$key} > 3);
-
-        push(@Content, $cgi->hidden(sprintf("maxlap-%s", $key), $MaxLaps{$key}));
-        push(@Content, $cgi->hidden(sprintf("members-%s", $key), $GroupSetMembers{$key}));
-        push(@Content, $cgi->hidden(sprintf("datestamp-%s", $key), $GroupSetDateStamp{$key}));
-
-    }
-
-
-    #my $reportcount = 0;
     #foreach my $key (sort keys(%GroupSetMembers)) {
+    #    printf STDERR "groupsetid: %s members: %d count: %d\n", $key, $GroupSetMembers{$key}, $GroupSetCount{$key};
+
     #    next unless ($GroupSetCount{$key} >= ($GroupSetMembers{$key} - 1));
     #    next unless ($GroupSetMembers{$key} > 3);
-    #    printf STDERR "groupsetid: %s members: %d count: %d\n", $key, $GroupSetMembers{$key}, $GroupSetCount{$key};
-    #    push(@Content, do_analysis ($dbh, $cgi, $reportcount++, $key, -1, 0));
+
+    #    push(@Content, $cgi->hidden(sprintf("maxlap-%s", $key), $MaxLaps{$key}));
+    #    push(@Content, $cgi->hidden(sprintf("members-%s", $key), $GroupSetMembers{$key}));
+    #    push(@Content, $cgi->hidden(sprintf("datestamp-%s", $key), $GroupSetDateStamp{$key}));
+
     #}
 
     return @Content;

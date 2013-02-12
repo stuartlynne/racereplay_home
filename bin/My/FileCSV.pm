@@ -55,7 +55,7 @@ sub do_csv {
     my (%Workouts, %Laps, %TotalMS, %BestLapMS, %StartTime, %FinishTime, %ChipName, %Chips, %ChipIDs);
 
     print_csv_str("datestamp",0);
-    print_csv_str("lapnumber",0);
+    print_csv_str("workoutlap",0);
     print_csv_str("finishms",0);
     print_csv_str("startms",0);
     print_csv_str("groupms",0);
@@ -76,7 +76,7 @@ sub do_csv {
 
         while ( my $row = $sthd->fetchrow_hashref()) {
             print_csv_str($row->{'datestamp'},0);
-            print_csv_str($row->{'lapnumber'},0);
+            print_csv_str($row->{'workoutlap'},0);
             print_csv_str($row->{'finishms'},0);
             print_csv_str($row->{'startms'},0);
             print_csv_str($row->{'groupms'},0);

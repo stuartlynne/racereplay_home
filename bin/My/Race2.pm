@@ -24,13 +24,10 @@ sub dump_flags {
     my @Content;
 
     printf STDERR "dump_flags: racelaps: %d\n", $lastlap;
-    push (@Content, reverse(@lapinfo));
+    push (@Content, "", "", "");
+    push (@Content, @lapinfo);
     push (@Content, "-", "-");
-    return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, 
-            $cgi->th({-colspan => 3}, ""),
-            $cgi->th("Laps Down"),
-            $cgi->th(\@Content),
-            );
+    return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, $cgi->th(\@Content),);
 }
 
 sub dump_th {
@@ -40,14 +37,10 @@ sub dump_th {
     my @Content;
 
     printf STDERR "dump_th: racelaps: %d\n", $lastlap;
-    #push (@Content, $cgi->th({-colspan => 3}, "Laps to Go"));
-    push (@Content, reverse(@togo));
+    push (@Content, "", "Rider", "Chip");
+    push (@Content, @togo);
     push (@Content, "-", "-");
-
-    return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, 
-            $cgi->th({-colspan => 4}, "Laps to Go"),
-            $cgi->th(\@Content),
-            );
+    return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, $cgi->th(\@Content),);
 }
 
 sub dump_perlap {
@@ -60,12 +53,12 @@ sub dump_perlap {
     for (my $i = 0; $i <= $lastlap; $i++) {
         my $row = $raceinfo[$i];
         my $lntime = $row->{'ELAPSED'};
-        unshift(@Content, Misc::mmss(($lntime - $lasttime)/1000)); 
+        push(@Content, Misc::mmss(($lntime - $lasttime)/1000)); 
         $lasttime = $lntime;
     }
     #push(@Content, "","");
     return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, 
-            $cgi->th({-colspan => 4}, "Time per lap"),
+            $cgi->th({-colspan => 3}, "Time per lap"),
             $cgi->th(\@Content),
             $cgi->th({-colspan => 2}, "(MM:SS or SS.S"),
             );
@@ -82,12 +75,12 @@ sub dump_kph {
     for (my $i = 0; $i <= $lastlap; $i++) {
         my $row = $raceinfo[$i];
         my $lntime = $row->{'ELAPSED'};
-        unshift(@Content, Misc::kph($distance, ($lntime - $lasttime))); 
+        push(@Content, Misc::kph($distance, ($lntime - $lasttime))); 
         $lasttime = $lntime;
     }
     #push(@Content, "","");
     return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, 
-            $cgi->th({-colspan => 4}, "Average speed per lap"),
+            $cgi->th({-colspan => 3}, "Average speed per lap"),
             $cgi->th(\@Content),
             $cgi->th({-colspan => 2}, "(kph)"),
             );
@@ -101,12 +94,12 @@ sub dump_time {
 
     for (my $i = 0; $i <= $lastlap; $i++) {
         my $row = $raceinfo[$i];
-        unshift(@Content, Misc::mmss($row->{'ELAPSED'}/1000)); 
+        push(@Content, Misc::mmss($row->{'ELAPSED'}/1000)); 
     }
 
     #push (@Content, "","");
     return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, 
-            $cgi->th({-colspan => 4}, "Elapsed time"),
+            $cgi->th({-colspan => 3}, "Elapsed time"),
             $cgi->th(\@Content),
             $cgi->th({-colspan => 2}, "(MM:SS or SS.S)"),
             );
@@ -141,8 +134,8 @@ sub do_start_table {
             dump_kph($cgi, $racetype, $lastlap, $distance, \@raceinfo),
             dump_perlap($cgi, $racetype, $lastlap, \@raceinfo),
             dump_time($cgi, $racetype, $lastlap, \@raceinfo),
-            dump_th($cgi, $racetype, $racelaps, $lastlap, $togo_ref),
             dump_flags($cgi, $racetype, $racelaps, $lastlap, \@lapinfo),
+            dump_th($cgi, $racetype, $racelaps, $lastlap, $togo_ref),
             );
 
     return @Content;
@@ -152,19 +145,13 @@ sub dump_last {
     my ($cgi, $racetype, $racelaps, $lastlap, @raceinfo) = @_;
     my @Content;
 
-    #push (@Content, "", "", "");
+    push (@Content, "", "", "");
 
     for (my $i = 0; $i < $lastlap; $i++) {
-        unshift(@Content, sprintf("%5d", $i)); 
+        push(@Content, sprintf("%5d", $i)); 
     }
-    #push(@Content, "", "");
-    #return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, $cgi->th(\@Content),);
-
-    return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, 
-            $cgi->th({-colspan => 4}, "Laps Recorded"),
-            $cgi->th(\@Content),
-            $cgi->th({-colspan => 2}, ""),
-            );
+    push(@Content, "", "");
+    return $cgi->Tr( { -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" }, $cgi->th(\@Content),);
 }
 
 
@@ -240,6 +227,8 @@ sub Race::do_analysis {
         #
         push(@RaceInfo, $row);
         push(@LapTimes, $row->{'ELAPSED'}); 
+
+
 
         # First lap - save LastLap, DateStamp and StartMS
         #
@@ -428,6 +417,18 @@ sub Race::do_analysis {
 
         my @Entries;
 
+        push (@Entries, $cgi->td($i+1));
+        if (defined($name)) {
+            push (@Entries, $cgi->td($name));
+        }
+        elsif (defined($shortname)) {
+            push (@Entries, $cgi->td($shortname));
+        }
+        else {
+            push (@Entries, $cgi->td("-"));
+        }
+        push (@Entries, $cgi->td($chip), $cgi->td(""));
+
         my $tr_class = ($i % 2)  ? 'tr_odd' : 'tr_even';
 
         $sth->execute($chipid, $reference_groupsetid, $LastLap) || Misc::diemsg(__LINE__, "finish order lookup", $sth);
@@ -452,59 +453,40 @@ sub Race::do_analysis {
                 #printf STDERR "lapnumber: %d %d LAPTIME0: %s LAPTIMEN: %s lapms: %d\n", $lapnumber, $LapTimes[$lapnumber], $laptime0, $laptimen, $lapms;
 
                 if ($finishorder == 1) {
-                    unshift(@Entries, $cgi->td({-bgcolor => 'yellow'},Misc::mmss($lapms/1000))); 
+                    push(@Entries, $cgi->td({-bgcolor => 'yellow'},Misc::mmss($lapms/1000))); 
                 }
                 else {
-                    unshift(@Entries, $cgi->td(Misc::mmss($lapms/1000))); 
+                    push(@Entries, $cgi->td(Misc::mmss($lapms/1000))); 
                 }
                 $LastFinishMS = $laptimen;
 
                 $MyLastLap = $lapnumber;
             }
             else {
-                unshift(@Entries, $cgi->td("-")); 
+                push(@Entries, $cgi->td("-")); 
                 $LapsDown++;
             }
         }
 
-        push (@Entries, 
-                $cgi->td("")
-                );
+        #printf STDERR "LastLap: %d MyLastLap: %d LapsDown: %d LastFinishMS: %d\n", $LastLap, $MyLastLap, $LapsDown, $LastFinishMS;
 
         if ($LapsDown) {
             if ($MyLastLap == $LastLap) {
-                unshift(@Entries, 
+                push(@Entries, 
                         $cgi->td($LapsDown),
                         $cgi->td( Misc::kph(($LastLap - $LapsDown) * $distance, $LastFinishMS))); 
             }
             else {
-                unshift(@Entries, 
+                push(@Entries, 
                         $cgi->td("DNF"), 
                         $cgi->td("")); 
             }
         }
         else {
-                unshift(@Entries, 
+                push(@Entries, 
                         $cgi->td(""),
                         $cgi->td(Misc::kph($LastLap * $distance, $LastFinishMS))); 
         }
-
-        unshift (@Entries, 
-                $cgi->td($chip), 
-                );
-        if (defined($name)) {
-            unshift (@Entries, $cgi->td($name));
-        }
-        elsif (defined($shortname)) {
-            unshift (@Entries, $cgi->td($shortname));
-        }
-        else {
-            unshift (@Entries, $cgi->td("-"));
-        }
-        unshift (@Entries, $cgi->td($i+1));
-
-        #printf STDERR "LastLap: %d MyLastLap: %d LapsDown: %d LastFinishMS: %d\n", $LastLap, $MyLastLap, $LapsDown, $LastFinishMS;
-
 
         push (@Content, 
                 $cgi->Tr( { -class => $tr_class, -align => "CENTER", -valign => "BOTTOM" }, @Entries));
