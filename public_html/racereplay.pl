@@ -46,6 +46,7 @@ BEGIN {
 
 use My::SqlDef qw(SqlConfig);
 use My::FKey qw(init find finish);
+use My::Health qw(do_health );
 use My::Misc qw(find_chipid get_venue_info get_event_info);
 use My::StravaTCX qw(do_strava_tcx);
 use My::FileCSV qw(do_csv);
@@ -143,201 +144,6 @@ sub dist2ms {
 #    return sprintf("%s:%s", $hhmmss[0], $hhmmss[1]);
 #}
 
-sub percent {
-    my ($count, $total) = @_;
-    my $pc1 = sprintf("%3.1f", ($count / $total) * 100);
-    my $pc2 = sprintf("%3.1f%s", ($count / $total) * 100, "%");
-    return ($pc1, $pc2);
-}
-
-my $redcolor = "#FF6633";
-my $greencolor = "#33CC66";
-my $yellowcolor = "#FFCC33";
-#my $redcolor = "red";
-
-sub colorlow {
-    my ($count,$red, $yellow) = @_;
-    return $redcolor if ($count <= $red);
-    return $yellowcolor if ($count <= $yellow);
-    return $greencolor;
-}
-sub colorhigh {
-    my ($count,$red, $yellow) = @_;
-
-    return $greencolor if ($count <= $yellow);
-    return $yellowcolor if ($count < $red);
-    return $redcolor;
-}
-
-
-sub dodef {
-    my ($ref) = @_;
-    return $ref if (defined($ref));
-    return "";
-}
-
-# ################################################################################################################### #
-# do_health
-#
-sub do_health {
-
-
-    my ($dbh, $cgi, $venue, $startdate, $event, $action) = @_;
-
-    my $chipid = param('chipid'),
-
-    my @Content;
-    my @Aside;
-
-    push(@Content, 
-            $cgi->start_form(),
-            $cgi->hidden('venue', $venue),
-            $cgi->hidden('chipid', $chipid),
-        );
-
-    my $sthl = $dbh->prepare("SELECT datestamp,chip,shortname,currentactivations,totalactivations,
-            replacebattery,activations,battery, skippedcount,corrections,batteryreplaced,batteryreplacedflag
-            FROM chips c LEFT JOIN health h ON c.chipid = h.chipid
-            WHERE c.chipid = ? ORDER BY datestamp DESC");
-
-    $sthl->execute($chipid) || die "Execute failed\n";
-
-    my (%Workouts, %Laps, %TotalMS, %BestLapMS, %StartTime, %FinishTime, %ChipName, %Chips, %ChipIDs);
-
-    my $firstflag = 1;
-
-    my $count = 0;
-    while ( my $row = $sthl->fetchrow_hashref()) {
-
-        my $chip = $row->{'chip'};
-        my $shortname = $row->{'shortname'};
-        my $replacebattery = $row->{'replacebattery'} ? "BAD" : "OK";
-        my $currentactivations = $row->{'currentactivations'};
-        my $totalactivations = $row->{'totalactivations'};
-        my $activations = $row->{'activations'};
-        my $batteryreplaced = dodef($row->{'batteryreplaced'});
-        my $batteryreplacedflag = dodef($row->{'batteryreplacedflag'});
-
-        if ($firstflag) {
-            $firstflag = 0;
-
-            $chip = $shortname if (defined($shortname) && $shortname ne "");
-
-            push(@Content,
-                    $cgi->h1(sprintf ("Race Replay - Chip Health")),
-                    $cgi->start_table({ -border => 1, -cellpadding => 3 }),
-                    );
-
-
-            my $BatStatColor = ($replacebattery eq "BAD") ? $redcolor : $greencolor;
-
-            push(@Content, 
-                    $cgi->Tr({ -align => "CENTER", -valign => "BOTTOM" },
-                        $cgi->th( {-class => 'border'}, 
-                            [
-                                $cgi->b("TagID"), 
-                                $cgi->b("Name"), 
-                                $cgi->b("Battery Status"), 
-                                $cgi->b("Current Activations"), 
-                                $cgi->b("Total Activations"), 
-                                $cgi->b("Last Battery"), 
-                            ])),
-
-                    $cgi->Tr({ -align => "CENTER", -valign => "BOTTOM" },
-                        $cgi->td(
-                            [ 
-                                $chip,
-                                $shortname,
-                                {-bgcolor => $BatStatColor}, $replacebattery,
-                                $currentactivations,
-                                $totalactivations,
-                                $batteryreplaced,
-                            ],
-                            ),
-                            ),
-                        $cgi->end_table(),
-                        $cgi->br,
-                    $cgi->start_table({ -class => "table", -border => 1, -cellpadding => 3 }),
-                    $cgi->caption({-class => "large_left_caption"}, "Health"),
-                    $cgi->Tr({ -align => "CENTER", -valign => "BOTTOM" },
-                            $cgi->td( [
-                                $cgi->b("Date"), 
-                                $cgi->b("Activations"), 
-                                $cgi->b("BATT OK (Low is Bad)"), 
-                                $cgi->b("Corrections (High is Bad)"), 
-                                $cgi->b("Skipped (High is Bad)"), 
-                                $cgi->b("Last Battery"), 
-                                ])),
-                        );
-        }
-        #printf STDERR Dumper($row);
-        printf STDERR "date: %s\n", $row->{'datestamp'};
-
-        my ($batterypc, $batterypcf) = percent($row->{'battery'}, $activations);
-        my ($correctionspc, $correctionspcf) = percent($row->{'corrections'}, $activations);
-        my ($skippedcountpc, $skippedcountpcf) = percent($row->{'skippedcount'}, $activations);
-
-        my $batterycolor = colorlow($batterypc, 90, 98);
-        my $correctionscolor = colorhigh($correctionspc, 10, 5);
-        my $skippedcountcolor = colorhigh($skippedcountpc, 10, 5);
-
-        my $datestamp = $row->{'datestamp'};
-        #my $tr_class = ($count % 2) ? 'tr_odd' : 'tr_even';
-        my $tr_class = "";
-        push(@Content, 
-                $cgi->Tr({ -class => $tr_class, -align => "CENTER", -valign => "BOTTOM" },
-                    $cgi->td($row->{'datestamp'}),
-                    $cgi->td($row->{'activations'}),
-                    $cgi->td({-bgcolor => $batterycolor},$batterypcf),
-                    $cgi->td({-bgcolor => $correctionscolor},$correctionspcf),
-                    $cgi->td({-bgcolor => $skippedcountcolor},$skippedcountpcf),
-                    $cgi->td((($datestamp eq $batteryreplaced) || $batteryreplacedflag) ? "Replaced" : "-"),
-                    )
-            );
-
-        $count++;
-    }
-    $sthl->finish();
-
-    push(@Content, 
-
-            $cgi->end_table(),
-
-            $cgi->defaults('Restart form'),
-            $cgi->end_form(),
-
-            $cgi->br,
-            $cgi->hr,
-        );
-
-    push(@Aside,
-            $cgi->h2("Battery Status"),
-            "If there is a significant number of BATT OK flags being seen as FALSE then this will be set to BAD.\n",
-            "This will be set if there has been a workout with at least 20 activations where the BATT OK count is less than 90%.\n",
-
-            $cgi->h2("Total Activations"),
-            "The total number of activations the Race Replay system has recorded for this transponder chip.\n",
-
-            $cgi->h2("BATT OK"),
-            "This is the total number of battery OK flags counted. The closer to 100% the better your battery is. \n",
-            "Anything less than 100% indicates that the transponder chip has reported that the battery voltage was low.\n",
-            "When the voltage is near the cutoff (3.0V) this may not happen on every activation, but will still be a warning that the battery will need to be changed soon.\n",
-
-            $cgi->h2("Corrections"),
-            "This is the number of times that the transponder chip had to re-transmit its ID before the timing system recieved a valid response. \n",
-            "Numbers close to zero are best.\n",
-            "High numbers can indicate two different problems, either that the battery is low or that the transponder chip is not mounted in a good location.\n",
-
-            $cgi->h2("Skipped"),
-            "As the timing data is imported into the Race Replay Database it can in some cases recognize if the timing system did not receive an activation message \n",
-            "from the transponder chip. This should be zero.\n",
-            "This can be due to various problems. Typically it could be one of a low battery, bad mounting location and very occasionally \n",
-            "some external issue such as too many other riders on the track (which can block the signal).\n",
-
-            );
-
-    return do_page($dbh, $cgi, "Transponder Chip Health", "", \@Content, \@Aside);
-}
 
 # ################################################################################################################### #
 
@@ -1025,7 +831,11 @@ sub do_work {
             my $venue = param('venue');
             my $startdate = param('startdate');
             my $event = param('event');
-            print do_health($dbh, $cgi, $venue, $startdate, $event, $action);
+
+            my ($Content_ref, $Aside_ref) = Health::do_health($dbh, $cgi, $venue, $startdate, $event, $action);
+            my @Content = @$Content_ref;
+            my @Aside = @$Aside_ref;
+            print do_page($dbh, $cgi, "Transponder Chip Health", "", \@Content, \@Aside);
             return;
         }
     }
