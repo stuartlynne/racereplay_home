@@ -2,8 +2,6 @@
 #PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
 
 DIR=$(shell expr $$(pwd) : "/home/\([^/]*\)")
-
-
 PATH = ":/bin:/usr/bin:/usr/local/bin:/home/${DIR}/bin:"
 
 DATABASE = "${DIR}"

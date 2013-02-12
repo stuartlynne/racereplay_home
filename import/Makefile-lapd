@@ -1,9 +1,18 @@
 
-PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
+#PATH = ":/bin:/usr/bin:/usr/local/bin:/home/racereplay/bin:"
+#
+#DATABASE = "racetest"
+#DBUSER = "racetest"
+#DBPASSWORD = "aa.bb.cc"
 
-DATABASE = "racetest"
-DBUSER = "racetest"
+DIR=$(shell expr $$(pwd) : "/home/\([^/]*\)")
+PATH = ":/bin:/usr/bin:/usr/local/bin:/home/${DIR}/bin:"
+
+DATABASE = "${DIR}"
+DBUSER = "${DIR}"
 DBPASSWORD = "aa.bb.cc"
+
+
 
 
 CSV = $(wildcard *.csv)
@@ -13,7 +22,7 @@ LAPD = $(subst .csv,.lap,$(filter lapd-%,${CSV}))
 
 %.lap: %.csv
 	touch $@
-	lapimport $< > $@
+	lapimport $< > $@ 2>&1 
 
 .PHONY : all usage lapd tables test clean
 
@@ -26,6 +35,7 @@ usage:
 lapd: ${LAPD}
 
 test:
+	@echo PATH: ${PATH}
 	@echo CSV: ${CSV}
 	@echo FILES: ${FILES}
 	@echo LAPD: ${LAPD}

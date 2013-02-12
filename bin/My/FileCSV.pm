@@ -44,7 +44,7 @@ sub do_csv {
     printf $cgi->header( '-Content-Disposition' => sprintf("attachment;filename=\"%s-%s.csv\"", $name, $starttime),
             '-Content-Type' => "text/plain");
     
-    my $sthl = $dbh->prepare("SELECT * FROM lapsets l JOIN chips c ON l.chipid = c.chipid
+    my $sthl = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
                 WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
 
@@ -55,7 +55,7 @@ sub do_csv {
     my (%Workouts, %Laps, %TotalMS, %BestLapMS, %StartTime, %FinishTime, %ChipName, %Chips, %ChipIDs);
 
     print_csv_str("datestamp",0);
-    print_csv_str("lapnumber",0);
+    print_csv_str("workoutlap",0);
     print_csv_str("finishms",0);
     print_csv_str("startms",0);
     print_csv_str("groupms",0);
@@ -67,16 +67,16 @@ sub do_csv {
 
     while ( my $row = $sthl->fetchrow_hashref()) {
 
-        my $lapsetid = $row->{'lapsetid'};
+        my $workoutid = $row->{'workoutid'};
 
-        #printf STDERR "lapsetid: %s\n", $lapsetid;
+        #printf STDERR "workoutid: %s\n", $workoutid;
 
-        my $sthd = $dbh->prepare("SELECT * FROM laps WHERE lapsetid = ?  ORDER BY datestamp ASC");
-        $sthd->execute($lapsetid) || die "Execute failed\n";
+        my $sthd = $dbh->prepare("SELECT * FROM laps WHERE workoutid = ?  ORDER BY datestamp ASC");
+        $sthd->execute($workoutid) || die "Execute failed\n";
 
         while ( my $row = $sthd->fetchrow_hashref()) {
             print_csv_str($row->{'datestamp'},0);
-            print_csv_str($row->{'lapnumber'},0);
+            print_csv_str($row->{'workoutlap'},0);
             print_csv_str($row->{'finishms'},0);
             print_csv_str($row->{'startms'},0);
             print_csv_str($row->{'groupms'},0);

@@ -374,18 +374,18 @@ This is a required field.]]></comment>
 			</fk>
 		</table>
 	</schema>
-	<connector name="RaceTest" database="MySql" driver_class="com.mysql.jdbc.Driver" driver_jar="mysql-connector-java-5.1.20-bin.jar" host="whiskey.local" port="3306" instance="information_schema" user="root" passwd="YWEuYmIuY2M=" schema_mapping="" />
+	<connector name="RaceTest" database="MySql" driver_class="com.mysql.jdbc.Driver" driver_jar="mysql-connector-java-5.1.20-bin.jar" host="localhost" port="3306" instance="information_schema" user="root" passwd="W11bXVtd" schema_mapping="" />
 	<layout name="race1" show_schema_name="y" show_relation_name="y" >
-		<entity schema="racetest" name="users" x="854" y="98" />
-		<entity schema="racetest" name="events" x="56" y="42" />
-		<entity schema="racetest" name="organizers" x="448" y="42" />
-		<entity schema="racetest" name="groupsets" x="42" y="406" />
-		<entity schema="racetest" name="chiphistory" x="644" y="56" />
-		<entity schema="racetest" name="chips" x="644" y="252" />
-		<entity schema="racetest" name="venues" x="252" y="84" />
-		<entity schema="racetest" name="health" x="672" y="490" />
-		<entity schema="racetest" name="lapsets" x="420" y="420" />
-		<entity schema="racetest" name="laps" x="238" y="490" />
+		<entity schema="racetest" name="health" color="c0d4f3" x="1022" y="280" />
+		<entity schema="racetest" name="users" color="c0d4f3" x="1246" y="112" />
+		<entity schema="racetest" name="chiphistory" color="c0d4f3" x="1050" y="70" />
+		<entity schema="racetest" name="venues" color="c0d4f3" x="210" y="266" />
+		<entity schema="racetest" name="events" color="c0d4f3" x="42" y="168" />
+		<entity schema="racetest" name="lapsets" color="c0d4f3" x="448" y="252" />
+		<entity schema="racetest" name="groupsets" color="c0d4f3" x="448" y="112" />
+		<entity schema="racetest" name="laps" color="c0d4f3" x="658" y="126" />
+		<entity schema="racetest" name="chips" color="c0d4f3" x="868" y="42" />
+		<entity schema="racetest" name="organizers" color="c0d4f3" x="210" y="56" />
 		<group name="venue data" color="c4e0f9" >
 			<comment>xxxxx</comment>
 			<entity schema="racetest" name="laps" />
@@ -405,5 +405,44 @@ This is a required field.]]></comment>
 			<entity schema="racetest" name="chiphistory" />
 			<entity schema="racetest" name="health" />
 		</group>
+		<script name="Sql" >
+			<string><![CDATA[select g.groupsetid, g.members, l.datestamp, l.lapsetid, l.lapnumber, c.chipid
+from racetest.groupsets g
+join racetest.events e on e.venueid = g.venueid 
+join racetest.laps l on l.groupsetid = g.groupsetid
+join racetest.lapsets s on l.lapsetid = s.lapsetid
+left join racetest.chips c on s.chipid = c.chipid
+left join 
+    (select h.chipid, h.userid from racetest.chiphistory h
+     where  h.chipid = c.chipid) test on test.chipid = c.chipid
+where g.datestamp between e.starttime and e.finishtime and e.eventid = 21 and l.lapnumber = 0 and g.members > 5
+order by l.datestamp]]></string>
+		</script>
+		<script name="Sql_001" >
+			<string><![CDATA[SELECT L0.groupsetid, S.starttime,
+                CONCAT(U.firstname, ' ', U.lastname) FULLNAME,                 # user name
+                (L.finishms) LFINISHMS,
+                (LN.finishms) LNFINISHMS,
+                ((L.finishms - LN.finishms)) ELAPSEDMS,
+                ((L.finishms - LN.finishms) /1000) ELAPSED,       # compute elapsed time in decimal seconds
+                L.lapnumber,                                                   # lapnumber
+                L0.groupms,
+                S.chipid                                                  # chipid                                                    
+            FROM racetest.laps LN
+            JOIN racetest.lapsets S ON LN.lapsetid = S.lapsetid
+            JOIN racetest.laps L ON S.lapsetid = L.lapsetid
+            JOIN racetest.laps L0 on L0.groupsetid = LN.groupsetid and L0.groupnumber = 1
+            LEFT JOIN racetest.chips C ON S.chipid = C.chipid
+            LEFT JOIN racetest.chiphistory H
+                ON C.chipid = H.chipid AND (
+                    (S.starttime BETWEEN H.starttime AND H.finishtime) OR
+                    (S.starttime >= H.starttime and H.finishtime = '00-00-00 00:00:00'))
+            LEFT JOIN racetest.users U ON H.userid = U.userid
+            WHERE LN.groupsetid = '666'  AND S.chipid = '68'
+            ORDER by L.finishms ASC]]></string>
+		</script>
+		<script name="Sql_004" >
+			<string><![CDATA[SELECT * from racetest.events e join racetest.venues v join racetest.groupsets g where v.venueid = 1 and e.eventid = 1 and g.groupsetid = 1;]]></string>
+		</script>
 	</layout>
 </project>

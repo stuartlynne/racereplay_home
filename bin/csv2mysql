@@ -425,18 +425,27 @@ sub do_newbattery {
         foreach my $key (keys(%{$row})) { unless (defined($row->{ $key })) { $row->{ $key } = ""; } }
 
         my $datestamp = $row->{'datestamp'};
-        my $shortname = $row->{'shortname'};
-        my $chip = $row->{'chip'};
-
         next unless (defined($datestamp) && $datestamp ne "");
 
+        my $target_shortname = $row->{'shortname'};
+        my $target_chip = $row->{'chip'};
 
-        my $chipid;
+        my $chip = "";
+        my $chipid = "";
+        my $shortname = "";
 
         # shortname?
-        if (defined($shortname) && $shortname ne "") {
-            printf STDERR "Shortname: %s %s\n", $shortname, $datestamp;
-            $chipid = Misc::find_loaner($dbsql, $shortname);
+        if (defined($target_shortname) && $target_shortname ne "") {
+
+            printf STDERR "Shortname: %s %s\n", $target_shortname, $datestamp;
+            my ($found_chipid, $found_chip) = Misc::find_shortname_all($dbsql, $target_shortname, 0);
+            unless(defined($chipid)) {
+                printf STDERR "Cannot find shortname: %s\n", $shortname;
+                next;
+            }
+            $chip = $found_chip;
+            $chipid = $found_chipid;
+            $shortname = $target_shortname;
 
             unless(defined($chipid)) {
                 printf STDERR "Cannot find shortname: %s\n", $shortname;
@@ -444,31 +453,31 @@ sub do_newbattery {
             }
         }
         # chip id?
-        elsif (defined($chip) && $chip ne "") {
-            printf STDERR "Chip: %s %s\n", $chip, $datestamp;
-            $chipid = Misc::find_chipid($dbsql, $chip);
+        elsif (defined($target_chip) && $target_chip ne "") {
+
+            printf STDERR "Chip: %s %s\n", $target_chip, $datestamp;
+            my ($found_chipid, $found_shortname) = Misc::find_chipid_all($dbsql, $target_chip, 0);
+            unless(defined($chipid)) {
+                printf STDERR "Cannot find chip: %s\n", $target_chip;
+                next;
+            }
+            $chip = $target_chip;
+            $chipid = $found_chipid;
+            $shortname = $found_shortname;
         }
         else {
             printf STDERR "Need chip or shortname\n";
             next;
         }
 
-        my $healthid = Misc::find_healthid($dbsql, $chipid, $datestamp);
-        printf STDERR "chipid: %s healthid: %s\n", $chipid, $healthid;
-
-        my $iuSth = $dbsql->prepare("
-                UPDATE chips c 
-                JOIN health h ON c.chipid = h.chipid 
-                SET c.currentactivations='0', c.replacebattery='0', c.batteryreplaced=?, h.batteryreplacedflag=1 
-                WHERE c.chipid=? AND h.healthid=?");
-        $iuSth->execute($datestamp, $chipid, $healthid) || printf STDERR "Update newbattery failed %s\n", $iuSth->errstr;
-        $iuSth->finish();
+        
+        my $iSth = $dbsql->prepare("INSERT INTO batteryhistory (chipid, batterydate) VALUES (?,?)");
+        $iSth->execute($chipid, $datestamp) || printf STDERR "INSERT batteryhistory failed %s\n", $iSth->errstr;
+        $iSth->finish();
         next;
-
     }   
     $cSth->finish();
 }   
-
 
 ######################################################################################################################
 sub dump_sql {
@@ -510,6 +519,8 @@ $table =~ s/.csv//;
 my $dbcsv = DBI->connect("dbi:CSV:f_dir=$DIRECTORY;csv_eol=\n;");
 my $dbsql = DBI->connect("dbi:mysql:$DATABASE", $DBUSER, $DBPASSWORD, { 'PrintError' => 0 }) || die "Cannot connect to mysql\n";
 
+#$dbsql->{'AutoCommit'} = 0;
+
 my $csvfile = sprintf("%s.csv", $table);
 
 unless (-e $csvfile && -s $csvfile) {
@@ -529,11 +540,13 @@ $dbcsv->{ 'csv_tables' }->{ $table } = { 'file' => $csvfile };
 #
 if ($table eq "organizers") {
     do_simple($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "users") {
     do_users($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
@@ -547,16 +560,19 @@ if ($table eq "users") {
 #
 if ($table eq "venues") {
     do_oneforeign("organizer", $table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "events") {
     do_oneforeign("venue", $table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "chips") {
-    do_oneforeign("organizer",$table, $dbcsv, $dbsql);
+    do_oneforeign("chip",$table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
@@ -570,16 +586,19 @@ if ($table eq "chips") {
 #
 if ($table eq "tags") {
     do_chiphistory($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "chiphistory") {
     do_chiphistory($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 
 if ($table eq "newbattery") {
     do_newbattery($table, $dbcsv, $dbsql);
+    #$dbsql->{'AutoCommit'} = 1;
     exit();
 }
 

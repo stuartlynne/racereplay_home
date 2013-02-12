@@ -46,9 +46,12 @@ BEGIN {
 
 use My::SqlDef qw(SqlConfig);
 use My::FKey qw(init find finish);
+use My::Health qw(do_health );
 use My::Misc qw(find_chipid get_venue_info get_event_info);
 use My::StravaTCX qw(do_strava_tcx);
 use My::FileCSV qw(do_csv);
+use My::Race qw(do_analysis);
+use My::Workouts qw(do_summary_workouts do_summary_races);
 
 my ($DATABASE, $DBUSER, $DBPASSWORD) = SqlDef::SqlConfig();
 #printf STDERR "%s %s %s\n", $DATABASE, $DBUSER, $DBPASSWORD;
@@ -85,13 +88,16 @@ my $CSS = "/css/two-liquid.css";
 # Changes to this must be related to equivalent changes in the /css/two-liquid.css file.
 #
 sub do_page {
-    my ($dbh, $cgi, $Title, $Content_ref, $Aside_ref) = @_;
+    my ($dbh, $cgi, $Title, $Script, $Content_ref, $Aside_ref) = @_;
     return (
             # HTML Header
             $cgi->header, 
 
             # Start HTML
-            $cgi->start_html( -title => "Race Replay", -style => {'src' => $CSS},),
+            $cgi->start_html( 
+                -title => "Race Replay", 
+                -script => $Script,
+                -style => {'src' => $CSS},),
 
             # Encapsulate into container division
             $cgi->div ( { -id => 'container', }, 
@@ -125,216 +131,23 @@ sub dist2ms {
     return ($distance / $speed) *60 * 60 * 1000;
 }
 
-sub kph {
-    my ($distance, $ms) = @_;
-    my $kph = (3600/($ms/1000)) * $distance;
-    return sprintf("%5.2f", $kph);
-}
+#sub kph {
+#    my ($distance, $ms) = @_;
+#    my $kph = (3600/($ms/1000)) * $distance;
+#    return sprintf("%5.2f", $kph);
+#}
 
-sub hhmm {
-    my ($datestamp) = @_;
-    my @values = split(/ /,$datestamp);
-    my @hhmmss = split(/:/,$values[1]);
-    return sprintf("%s:%s", $hhmmss[0], $hhmmss[1]);
-}
+#sub hhmm {
+#    my ($datestamp) = @_;
+#    my @values = split(/ /,$datestamp);
+#    my @hhmmss = split(/:/,$values[1]);
+#    return sprintf("%s:%s", $hhmmss[0], $hhmmss[1]);
+#}
 
-sub percent {
-    my ($count, $total) = @_;
-    my $pc1 = sprintf("%3.1f", ($count / $total) * 100);
-    my $pc2 = sprintf("%3.1f%s", ($count / $total) * 100, "%");
-    return ($pc1, $pc2);
-}
-
-my $redcolor = "#FF6633";
-my $greencolor = "#33CC66";
-my $yellowcolor = "#FFCC33";
-#my $redcolor = "red";
-
-sub colorlow {
-    my ($count,$red, $yellow) = @_;
-    return $redcolor if ($count <= $red);
-    return $yellowcolor if ($count <= $yellow);
-    return $greencolor;
-}
-sub colorhigh {
-    my ($count,$red, $yellow) = @_;
-
-    return $greencolor if ($count <= $yellow);
-    return $yellowcolor if ($count < $red);
-    return $redcolor;
-}
-
-
-sub dodef {
-    my ($ref) = @_;
-    return $ref if (defined($ref));
-    return "";
-}
 
 # ################################################################################################################### #
 
-# do_health
-#
-sub do_health {
 
-
-    my ($dbh, $cgi, $venue, $startdate, $event, $action) = @_;
-
-    my $chipid = param('chipid'),
-
-    my @Content;
-    my @Aside;
-
-    push(@Content, 
-            $cgi->start_form(),
-            $cgi->hidden('venue', $venue),
-            $cgi->hidden('chipid', $chipid),
-        );
-
-    my $sthl = $dbh->prepare("SELECT datestamp,chip,shortname,currentactivations,totalactivations,
-            replacebattery,activations,battery, skippedcount,corrections,batteryreplaced,batteryreplacedflag
-            FROM chips c LEFT JOIN health h ON c.chipid = h.chipid
-            WHERE c.chipid = ? ORDER BY datestamp DESC");
-
-    $sthl->execute($chipid) || die "Execute failed\n";
-
-    my (%Workouts, %Laps, %TotalMS, %BestLapMS, %StartTime, %FinishTime, %ChipName, %Chips, %ChipIDs);
-
-    my $firstflag = 1;
-
-    my $count = 0;
-    while ( my $row = $sthl->fetchrow_hashref()) {
-
-        my $chip = $row->{'chip'};
-        my $shortname = $row->{'shortname'};
-        my $replacebattery = $row->{'replacebattery'} ? "BAD" : "OK";
-        my $currentactivations = $row->{'currentactivations'};
-        my $totalactivations = $row->{'totalactivations'};
-        my $activations = $row->{'activations'};
-        my $batteryreplaced = dodef($row->{'batteryreplaced'});
-        my $batteryreplacedflag = dodef($row->{'batteryreplacedflag'});
-
-        if ($firstflag) {
-            $firstflag = 0;
-
-            $chip = $shortname if (defined($shortname) && $shortname ne "");
-
-            push(@Content,
-                    $cgi->h1(sprintf ("Race Replay - Chip Health")),
-                    $cgi->start_table({ -border => 1, -cellpadding => 3 }),
-                    );
-
-
-            my $BatStatColor = ($replacebattery eq "BAD") ? $redcolor : $greencolor;
-
-            push(@Content, 
-                    $cgi->Tr({ -align => "CENTER", -valign => "TOP" },
-                        $cgi->th( {-class => 'border'}, 
-                            [
-                                $cgi->b("TagID"), 
-                                $cgi->b("Name"), 
-                                $cgi->b("Battery Status"), 
-                                $cgi->b("Current Activations"), 
-                                $cgi->b("Total Activations"), 
-                                $cgi->b("Last Battery"), 
-                            ])),
-
-                    $cgi->Tr({ -align => "CENTER", -valign => "TOP" },
-                        $cgi->td(
-                            [ 
-                                $chip,
-                                $shortname,
-                                {-bgcolor => $BatStatColor}, $replacebattery,
-                                $currentactivations,
-                                $totalactivations,
-                                $batteryreplaced,
-                            ],
-                            ),
-                            ),
-                        $cgi->end_table(),
-                        $cgi->br,
-                    $cgi->start_table({ -class => "table", -border => 1, -cellpadding => 3 }),
-                    $cgi->Tr({ -align => "CENTER", -valign => "TOP" },
-                            $cgi->td( [
-                                $cgi->b("Date"), 
-                                $cgi->b("Activations"), 
-                                $cgi->b("BATT OK (Low is Bad)"), 
-                                $cgi->b("Corrections (High is Bad)"), 
-                                $cgi->b("Skipped (High is Bad)"), 
-                                $cgi->b("Last Battery"), 
-                                ])),
-                        );
-        }
-        #printf STDERR Dumper($row);
-        printf STDERR "date: %s\n", $row->{'datestamp'};
-
-        my ($batterypc, $batterypcf) = percent($row->{'battery'}, $activations);
-        my ($correctionspc, $correctionspcf) = percent($row->{'corrections'}, $activations);
-        my ($skippedcountpc, $skippedcountpcf) = percent($row->{'skippedcount'}, $activations);
-
-        my $batterycolor = colorlow($batterypc, 90, 98);
-        my $correctionscolor = colorhigh($correctionspc, 10, 5);
-        my $skippedcountcolor = colorhigh($skippedcountpc, 10, 5);
-
-        my $datestamp = $row->{'datestamp'};
-        #my $tr_class = ($count % 2) ? 'tr_odd' : 'tr_even';
-        my $tr_class = "";
-        push(@Content, 
-                $cgi->Tr({ -class => $tr_class, -align => "CENTER", -valign => "TOP" },
-                    $cgi->td($row->{'datestamp'}),
-                    $cgi->td($row->{'activations'}),
-                    $cgi->td({-bgcolor => $batterycolor},$batterypcf),
-                    $cgi->td({-bgcolor => $correctionscolor},$correctionspcf),
-                    $cgi->td({-bgcolor => $skippedcountcolor},$skippedcountpcf),
-                    $cgi->td((($datestamp eq $batteryreplaced) || $batteryreplacedflag) ? "Replaced" : "-"),
-                    )
-            );
-
-        $count++;
-    }
-    $sthl->finish();
-
-    push(@Content, 
-
-            $cgi->end_table(),
-
-            $cgi->defaults('Restart form'),
-            $cgi->end_form(),
-
-            $cgi->br,
-            $cgi->hr,
-        );
-
-    push(@Aside,
-            $cgi->h2("Battery Status"),
-            "If there is a significant number of BATT OK flags being seen as FALSE then this will be set to BAD.\n",
-            "This will be set if there has been a workout with at least 20 activations where the BATT OK count is less than 90%.\n",
-
-            $cgi->h2("Total Activations"),
-            "The total number of activations the Race Replay system has recorded for this transponder chip.\n",
-
-            $cgi->h2("BATT OK"),
-            "This is the total number of battery OK flags counted. The closer to 100% the better your battery is. \n",
-            "Anything less than 100% indicates that the transponder chip has reported that the battery voltage was low.\n",
-            "When the voltage is near the cutoff (3.0V) this may not happen on every activation, but will still be a warning that the battery will need to be changed soon.\n",
-
-            $cgi->h2("Corrections"),
-            "This is the number of times that the transponder chip had to re-transmit its ID before the timing system recieved a valid response. \n",
-            "Numbers close to zero are best.\n",
-            "High numbers can indicate two different problems, either that the battery is low or that the transponder chip is not mounted in a good location.\n",
-
-            $cgi->h2("Skipped"),
-            "As the timing data is imported into the Race Replay Database it can in some cases recognize if the timing system did not receive an activation message \n",
-            "from the transponder chip. This should be zero.\n",
-            "This can be due to various problems. Typically it could be one of a low battery, bad mounting location and very occasionally \n",
-            "some external issue such as too many other riders on the track (which can block the signal).\n",
-
-            );
-
-    return do_page($dbh, $cgi, "Transponder Chip Health", \@Content, \@Aside);
-}
-
-# ################################################################################################################### #
 
 # do_summary
 #
@@ -347,6 +160,7 @@ sub do_summary {
     my $Event_info = Misc::get_event_info($dbh, $startdate, $venue, $event);
 
     print STDERR Dumper($Event_info);
+    my $eventid = $Event_info->{'eventid'};
     my $starttime = $Event_info->{'starttime'};
     my $finishtime = $Event_info->{'finishtime'};
     my $start = $Event_info->{'start'};
@@ -355,6 +169,7 @@ sub do_summary {
 
     printf STDERR "do_summary: startdate: %s venue: %s event: %s\n", $startdate, $venue, $event;
 
+    my $venueid = -1;
     my $organizer = "";
     my $distance = "";
     my $minspeed = 0;
@@ -364,6 +179,7 @@ sub do_summary {
     my $gaptime = 0;
 
     if ($Venue_ref) {
+        $venueid = $Venue_ref->{'venueid'};
         $organizer = $Venue_ref->{'organizer'};
         $distance = $Venue_ref->{'distance'};
         $minspeed = $Venue_ref->{'minspeed'};
@@ -373,177 +189,32 @@ sub do_summary {
         $maxtime = dist2ms($distance, $minspeed);
     }
 
-
-    my $total = 0;
-
-    my $sth = $dbh->prepare("SELECT * FROM lapsets l JOIN chips c ON l.chipid = c.chipid
-            WHERE venueid = (SELECT venueid FROM venues 
-            WHERE venue=?) AND starttime >= ? and finishtime  <= ? ORDER BY starttime ASC");
-
-    $sth->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%")) || die "Execute failed\n";
-
-    my $count = 0;
-
-    my (%Workouts, %Laps, %TotalMS, %BestLapMS, %StartTime, %FinishTime, %ChipName, %UserName, %Chips, %ChipIDs, %ReplaceBattery);
-
-    while ( my $row = $sth->fetchrow_hashref()) {
-
-        #printf STDERR Dumper(%Workouts);
-        #printf STDERR Dumper($row);
-        my $totalms = $row->{'totalms'};
-        next unless ($totalms != 0);;
-        my $laps = $row->{'laps'};
-        next unless($laps > 2);
-
-        printf STDERR "[%d] lapsetid: %s start: %s finish: %s\n", $count, $row->{'lapsetid'}, $row->{'starttime'}, $row->{'finishtime'};
-
-        my $chipid = $row->{'chipid'};
-        my $chip = $row->{'chip'};
-
-        unless ($Chips{$chip}) {
-            my $shortname = Misc::get_loaner($dbh, $chipid, $row->{'chip'});
-            $Chips{$chipid} = $shortname;
-        }
-
-        # derive user info from chipid via chiphistory table
-        #
-        my ($userid, $name) = Misc::get_user_name($dbh, $Chips{$chipid}, $chipid, $row->{'starttime'});
-        my $key = sprintf("%s-%s", $name, $chip);
-
-        unless (defined($Workouts{$key})) {
-            $Workouts{$key} = 1;
-            $Laps{$key} = $row->{'laps'};
-            $TotalMS{$key} = $row->{'totalms'};
-            $StartTime{$key} = $row->{'starttime'};
-            $FinishTime{$key} = $row->{'finishtime'};
-            $BestLapMS{$key} = $row->{'bestlapms'};
-            $ChipName{$key} = $Chips{$chipid};
-            $ChipIDs{$key} = $chipid;
-            $UserName{$key} = $name;
-            $ReplaceBattery{$key} = $row->{'replacebattery'};
-            printf STDERR "name: %s chipid: %s\n", $key, $chipid;
-        }
-        else {
-            $Workouts{$key}++;
-            $Laps{$key} += $row->{'laps'};
-            $TotalMS{$key} += $row->{'totalms'};
-            $FinishTime{$key} = $row->{'finishtime'};
-            $ReplaceBattery{$key} |= $row->{'replacebattery'};
-            #printf STDERR "BestLaps: %s > %s\n", $BestLapMS{$key},$row->{'bestlapms'};
-            if ($BestLapMS{$key} > $row->{'bestlapms'}) {
-                $BestLapMS{$key} = $row->{'bestlapms'};
-            }
-        }
-
-        printf STDERR "[%d] %s %s %3s %s %s %s ms: %s laps: %s\n", 
-               $count++, $row->{'chip'}, $Chips{$chipid}, $userid, $key, $row->{'starttime'}, $row->{'finishtime'}, $row->{'totalms'}, $row->{'laps'};
-
-    }
-    $sth->finish();
-
-
     my @Content;
-    my @Aside;
+    push(@Content, Workouts::do_summary_races($dbh, $cgi, $venue, $venueid, $event, $eventid, $startdate, $starttime, $finishtime, $distance));
+    push(@Content, Workouts::do_summary_workouts($dbh, $cgi, $venue, $venueid, $event, $eventid, $startdate, $starttime, $finishtime, $distance));
 
     push(@Content, 
-            $cgi->start_form(),
-            $cgi->hidden('venue', $venue),
-            $cgi->hidden('event', $event),
-            $cgi->hidden('startdate', $startdate),
-        );
-
-    # dump a table out
-    #
-    
-
-    push(@Content, 
-            $cgi->start_table({ -class => 'table', -cellpadding => 3 }),
-            $cgi->Tr({ -class => 'tr_odd', -align => "CENTER", -valign => "TOP" },
-                $cgi->th( [
-                    $cgi->b("Start"), 
-                    $cgi->b("Finish"), 
-                    $cgi->b("Name"), 
-                    $cgi->b("Chip"), 
-                    $cgi->b("HH:MM"), 
-                    $cgi->b("Workouts"), 
-                    $cgi->b("Laps"), 
-                    $cgi->b("Distance (km)"), 
-                    $cgi->b("Avg (kph"), 
-                    $cgi->b("Fastest"), 
-                    $cgi->b("Best Lap (kph)"),
-                    $cgi->b("Battery"),
-                    $cgi->b("Select")
-                    ]))
-        );
-
-    print STDERR "StartTime\n", Dumper(%StartTime);
-
-    # iterate across %Laps to generate table, sort on starttime
-    #
-    $count = 0;
-    foreach my $key (sort { $StartTime{$a} cmp $StartTime{$b}} keys(%StartTime)  ) 
-    {
-
-        my $seconds = $TotalMS{$key} / 1000;
-        my $minutes = ($seconds / 60) %60;
-        my $hours = ($seconds / (60 * 60));
-        $seconds = $seconds % 60;
-
-        printf STDERR "name: %s\n", $key;
-
-        my $bestlapms = $BestLapMS{$key} / 1000;
-        my $fastest = kph($distance, $bestlapms); 
-
-        printf STDERR "%-30s %s Laps: %3d %4.1f km Fastest: %5.2f %5.2f \n",
-               $key, $ChipName{$key}, $Laps{$key}, $Laps{$key} * $distance, $bestlapms, $fastest;
-
-        my $starttime = hhmm($StartTime{$key});
-        my $finishtime = hhmm($FinishTime{$key});
-
-        my $myself = $cgi->self_url();
-
-        my $replacebattery = $ReplaceBattery{$key} ? "BAD" : "OK";
-
-        my $tr_class = ($count % 2) ? 'tr_odd' : 'tr_even';
-
-        push(@Content, 
-                $cgi->Tr({ -class => $tr_class, -align => "CENTER", -valign => "TOP" },
-                    $cgi->td($starttime),
-                    $cgi->td($finishtime),
-                    #$cgi->td( sprintf("<a href=\"%s&doworkouts=%s\">%s</a>", $myself, $key, $key)),
-                    $cgi->td( $UserName{$key}),
-                    $cgi->td($ChipName{$key}),
-                    $cgi->td(sprintf("%d:%02d", $hours, $minutes)),
-                    $cgi->td($Workouts{$key}),
-                    $cgi->td($Laps{$key}),
-                    $cgi->td(sprintf("%5.1f", $Laps{$key} * $distance)),
-                    $cgi->td(sprintf("%5.1f", kph(($Laps{$key} * $distance), $TotalMS{$key}))),
-                    $cgi->td(sprintf("%5.1f", $BestLapMS{$key}/1000)),
-                    $cgi->td(sprintf("%5.1f", kph(($distance), $BestLapMS{$key}))),
-                    #$cgi->td($cgi->submit('action', $key,$key))
-                    $cgi->td($replacebattery),
-                    $cgi->td(checkbox(sprintf("select-%s", $key),0, $ChipIDs{$key},""))
-                    )
-                );
-
-        $count++;
-    }
-
-    push(@Content, 
-            $cgi->end_table(),
             $cgi->br(),
             $cgi->reset("Defaults"),
             $cgi->defaults('Restart form'),
             $cgi->submit('action',"Details"),
+            #$cgi->submit('action',"Analyze Race"),
             $cgi->end_form(),
         );
     
+
+    my @Aside;
     push(@Aside,
             $cgi->p($cgi->em("[Details]"), "Show more details for the selected workouts."),
             $cgi->p($cgi->em("[Restart Form]"), "Start over."),
+            #$cgi->p($cgi->em("[Analyze Race]"), "The second table shows possible race starts, this button will generate a report for selected races."),
+            $cgi->p($cgi->em("[Correction]"), "The Laps column shows the maximum recorded laps, this may be too high, use the correction menu to adjust down if required."),
+            $cgi->p($cgi->em("[Type]"), "Select the type of race."),
+            $cgi->p($cgi->em("[Sprints]"), "The number between sprints. For lap races this will also be used to help set the table width."),
+
         );
 
-    return do_page($dbh, $cgi, sprintf ("%s - %s", $event, $startdate), \@Content, \@Aside);
+    return do_page($dbh, $cgi, sprintf ("%s - %s", $event, $startdate), "", \@Content, \@Aside);
 }
 
 # ################################################################################################################### #
@@ -600,7 +271,7 @@ sub select_venue_form {
     printf STDERR "\n";
 
 
-    return do_page($dbh, $cgi, "Venue Selection", \@Content, \@Aside, );
+    return do_page($dbh, $cgi, "Venue Selection", "", \@Content, \@Aside, );
 
 }
 
@@ -655,7 +326,7 @@ sub select_date_form {
             $cgi->p($cgi->em("[Date Selected]"), "Select the date on which your workout or race was recorded"),
             $cgi->p($cgi->em("[Restart Form]"), "Start over."),
         );
-    return do_page($dbh, $cgi, "Select Date", \@Content, \@Aside, );
+    return do_page($dbh, $cgi, "Select Date", "", \@Content, \@Aside, );
 
 }
 
@@ -736,7 +407,7 @@ sub select_event_form {
             $cgi->p($cgi->em("[Event Selected]"), "Select the event or workout time."),
             $cgi->p($cgi->em("[Reset Form]"), "Start over."),
             );
-    return do_page($dbh, $cgi, "Select Event", \@Content, \@Aside, );
+    return do_page($dbh, $cgi, "Select Event", "", \@Content, \@Aside, );
 }
 
 # ################################################################################################################### #
@@ -766,7 +437,8 @@ sub do_workouts {
             $cgi->hidden('chipid', $chipid),
     
             $cgi->start_table({ -border => 1, -cellpadding => 3 }),
-            $cgi->Tr({ -class => 'tr_odd', -align => "CENTER", -valign => "TOP" },
+            $cgi->caption({-class => "large_left_caption"}, "Workouts"),
+            $cgi->Tr({ -class => 'tr_odd', -align => "CENTER", -valign => "BOTTOM" },
                 $cgi->th( [
                     $cgi->b("Start"), 
                     $cgi->b("Finish"), 
@@ -781,6 +453,7 @@ sub do_workouts {
                     $cgi->b("Batt"),
                     $cgi->b("Corr"),
                     $cgi->b("Skipped"),
+                    $cgi->b("Select"),
                     ]))
         );
 
@@ -807,7 +480,7 @@ sub do_workouts {
 
     my $total = 0;
 
-    my $sth = $dbh->prepare("SELECT * FROM lapsets l JOIN chips c ON l.chipid = c.chipid
+    my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
                 WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
 
@@ -818,10 +491,11 @@ sub do_workouts {
     my (%Workouts, %Laps, %TotalMS, %BestLapMS, %StartTime, %FinishTime, %ChipName, %Chips, %ChipIDs);
 
     $count = 0;
+    my $MaxLaps = 0;
     while ( my $row = $sth->fetchrow_hashref()) {
 
         printf STDERR "**************************************************\n";
-        printf STDERR Dumper(%Workouts);
+        printf STDERR Dumper($row);
 
         my $totalms = $row->{'totalms'};
         next unless ($totalms != 0);;
@@ -846,8 +520,8 @@ sub do_workouts {
         my ($userid, $name) = Misc::get_user_name($dbh, $Chips{$chipid}, $chipid, $row->{'starttime'});
 
 
-        my $starttime = hhmm($row->{'starttime'});
-        my $finishtime = hhmm($row->{'finishtime'});
+        my $starttime = Misc::hhmm($row->{'starttime'});
+        my $finishtime = Misc::hhmm($row->{'finishtime'});
 
 
         unless (defined($Workouts{$name})) {
@@ -861,6 +535,7 @@ sub do_workouts {
             $ChipIDs{$name} = $chipid;
             #printf STDERR "name: %s chipid: %s\n", $name, $chipid;
         }
+        $MaxLaps = $Laps{$name} if ($Laps{$name} > $MaxLaps);
 
         my $seconds = $row->{'totalms'} / 1000;
         my $minutes = ($seconds / 60) %60;
@@ -872,7 +547,7 @@ sub do_workouts {
         my $tr_class = ($count % 2) ? 'tr_odd' : 'tr_even';
         push(@Content,
                 
-                $cgi->Tr({ -class => $tr_class, -align => "CENTER", -valign => "TOP" },
+                $cgi->Tr({ -class => $tr_class, -align => "CENTER", -valign => "BOTTOM" },
                     $cgi->td($starttime),
                     $cgi->td($finishtime),
                     $cgi->td( $name),
@@ -880,13 +555,13 @@ sub do_workouts {
                     $cgi->td(sprintf("%d:%02d", $hours, $minutes)),
                     $cgi->td($laps),
                     $cgi->td(sprintf("%5.1f", $laps * $distance)),
-                    $cgi->td(sprintf("%5.1f", kph(($laps * $distance), $row->{'totalms'}))),
+                    $cgi->td(sprintf("%5.1f", Misc::kph(($laps * $distance), $row->{'totalms'}))),
                     $cgi->td(sprintf("%5.1f", $bestlapms/1000)),
-                    $cgi->td(sprintf("%5.1f", kph(($distance), $bestlapms))),
+                    $cgi->td(sprintf("%5.1f", Misc::kph(($distance), $bestlapms))),
                     $cgi->td($row->{'battery'}),
                     $cgi->td($row->{'corrections'}),
                     $cgi->td($row->{'skippedcount'}),
-                    #$cgi->td(checkbox(sprintf("select-%s", $key),0, $ChipIDs{$key},""))
+                    $cgi->td(checkbox(sprintf("workoutid-%s-%s", $starttime, $finishtime),0, $row->{'workoutid'},""))
                     ));
         $count++;
     }
@@ -899,8 +574,11 @@ sub do_workouts {
             $cgi->submit('action',"Strava TCX"),
             $cgi->submit('action',"Strava TCX 5"),
             $cgi->submit('action',"Strava Workouts"),
-            $cgi->submit('action',"CSV"),
+            $cgi->submit('action',"Workout CSV"),
             $cgi->submit('action',"Chip Health"),
+            $cgi->submit('action',"Compare"),
+            "Laps:",
+            $cgi->textfield(-name => 'laps', -value => $MaxLaps, -size => 10, -maxlength => 20),
             $cgi->end_form(),
             $cgi->hr(),
         );
@@ -910,7 +588,6 @@ sub do_workouts {
 
 
 # ################################################################################################################### #
-
 # do_details
 #
 sub do_details {
@@ -926,17 +603,13 @@ sub do_details {
     $sth->finish();
     unless(defined($row)) { die "Cannot find event!\n"; }
 
-
-    my @Content;
-    my @Aside;
-    
-    my $workoutcount = 0;
-
     printf STDERR "Action: %s\n", $action;
+    printf STDERR "Details\n";
 
-
-    #printf STDERR "Details\n";
-
+    # Create Content
+    #
+    my @Content;
+    my $workoutcount = 0;
     for my $key (param) {
         my $parameter = param($key);
 
@@ -961,6 +634,9 @@ sub do_details {
             );
     }
 
+    # Create Aside
+    #
+    my @Aside;
     push(@Aside, 
             $cgi->h2("Strava TCX"),
             $cgi->p(
@@ -978,15 +654,65 @@ sub do_details {
             $cgi->p("This will generate a TCX file suitable for Strava with the the TCX \"lap\" being each workout.\n"),
 
 
-            $cgi->h2("CSV"),
+            $cgi->h2("Workout CSV"),
             $cgi->p("This will generate a CSV file containing the raw workout data. This can be imported into Excel or OpenOffice for further analysis\n"),
 
 
             $cgi->h2("Chip Health"),
             $cgi->p("This will generate a Chip Health Report. This shows the battery flag status, corrections, and possibly skipped laps for a transponder chip\n"),
+
+            $cgi->h2("Compare"),
+            $cgi->p("This will generate a comparison report.\n"),
             );
 
-    return do_page($dbh, $cgi, "Details", \@Content, \@Aside);
+    return do_page($dbh, $cgi, "Details", "", \@Content, \@Aside);
+}
+
+# ################################################################################################################### #
+
+
+# do_compare
+#
+sub do_compare {
+
+    my ($dbh, $cgi, $venue, $startdate, $event, $action) = @_;
+
+    printf STDERR "Action: %s\n", $action;
+
+    # Create Content
+    #
+    my @Content;
+    my $workoutcount = 0;
+
+    my $workoutid = -1;
+    my $laps = -1;
+
+    for my $key (param) {
+        my $parameter = param($key);
+
+        if ($key =~ /workoutid-/) {
+            $key =~ s/select-//;
+            printf STDERR "key: %s\n", $key;
+            printf STDERR "parameter: %s\n", $parameter;
+            $workoutid = $parameter;
+        }
+
+        if ($key eq "laps") {
+            $laps = $parameter;
+        }
+    }
+
+    if ($workoutid) {
+        push(@Content, Race::do_analysis ($dbh, $cgi, $workoutcount++, -1, $workoutid, $laps, 0, "", "", "", "", 0));
+    }
+
+    # Create Aside
+    #
+    my @Aside;
+    push(@Aside, "");
+
+
+    return do_page($dbh, $cgi, "Workout Compare", "", \@Content, \@Aside);
 }
 
 # ################################################################################################################### #
@@ -1002,8 +728,8 @@ sub do_file {
     my $name = param('name');
     my $chipid = param('chipid');
     
-    if ($action eq "CSV") {
-        printf STDERR "CSV\n";
+    if ($action eq "Workout CSV") {
+        printf STDERR "Workout CSV\n";
         FileCSV::do_csv ($dbh, $cgi, $startdate, $venue, $event, $name, $chipid);
     }
 
@@ -1088,12 +814,38 @@ sub do_work {
         }
     }
 
+    # Race Report 
+    #
+#   if ( $action eq "Analyze Race" ) {
+#       if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
+#           my $venue = param('venue');
+#           my $startdate = param('startdate');
+#           my $event = param('event');
+#           print do_analyze_races($dbh, $cgi, $venue, $startdate, $event, $action);
+#           return;
+#       }
+#   }
+
     if ($action eq "Chip Health") {
         if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
             my $venue = param('venue');
             my $startdate = param('startdate');
             my $event = param('event');
-            print do_health($dbh, $cgi, $venue, $startdate, $event, $action);
+
+            my ($Content_ref, $Aside_ref) = Health::do_health($dbh, $cgi, $venue, $startdate, $event, $action);
+            my @Content = @$Content_ref;
+            my @Aside = @$Aside_ref;
+            print do_page($dbh, $cgi, "Transponder Chip Health", "", \@Content, \@Aside);
+            return;
+        }
+    }
+
+    if ($action eq "Compare") {
+        if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
+            my $venue = param('venue');
+            my $startdate = param('startdate');
+            my $event = param('event');
+            print do_compare($dbh, $cgi, $venue, $startdate, $event, $action);
             return;
         }
     }
@@ -1102,7 +854,7 @@ sub do_work {
             $action eq "Strava TCX" || 
             $action eq "Strava TCX 5" || 
             $action eq "Strava Workouts" || 
-            $action eq "CSV" ) 
+            $action eq "Workout CSV" ) 
     {
         if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
             my $venue = param('venue');
