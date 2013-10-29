@@ -731,7 +731,6 @@ else {
     else {
         my $loginfo = sprintf("wtactive started: %s %s %s", $VenueName, $IPAddress, $Port);
         syslog('warning', $loginfo);
-
     }
 }
 
@@ -742,12 +741,11 @@ my $Directory = ".";
 $dbh = DBI->connect("dbi:CSV:f_dir=$Directory;csv_eol=\n;");
 $dbh->{'AutoCommit'} = 1;       # CSV does not support transactions
 $dbh->{'RaiseError'} = 1;
-#$dbh->{'csv_tables' }->{'organizers'} = {'file' => 'organizers.csv'};
 $dbh->{'csv_tables' }->{'venues'} = {'file' => 'venues.csv'};
-#$dbh->{'csv_tables' }->{'users'} = {'file' => 'users.csv'};
 
 my $CSV = Text::CSV->new({ binary=> 1, eol => $/ });
 
+chdir ("lapd") || die "Cannot chdir to lapd\n";
 
 # FileMode
 # Just process a single file and exit
