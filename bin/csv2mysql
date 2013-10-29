@@ -231,7 +231,7 @@ sub do_oneforeign{
         #printf STDERR "Bind: %s\n", join(",", (@iBind, @uBind));
 
         unless ($iuSth->execute(@iBind, @uBind)) {
-                die "Cannot insert or update\n";
+                die sprintf("Cannot insert or update: %s\n", $iuSth->errstr );
         }
         $iuSth->finish();
     }
@@ -396,7 +396,7 @@ sub do_chiphistory{
         #printf STDERR "Bind: %s\n", join(",", (@iBind, @uBind));
 
         unless ($iuSth->execute(@iBind, @uBind)) {
-                die "Cannot insert or update\n";
+                die sprintf("Cannot insert or update: %s\n", $iuSth->errstr );
         }
         $iuSth->finish();
     }
