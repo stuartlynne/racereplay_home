@@ -57,7 +57,7 @@ test:
 	@echo DBUSER: ${DBUSER}
 
 drop: clean
-	@echo "DROP DATABASE ${DATABASE};" | mysql -u root -p
+	-@echo "DROP DATABASE ${DATABASE};" | mysql -u root -p
 
 create:
 	createdb ${DATABASE}
