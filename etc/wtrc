@@ -1,17 +1,41 @@
 #! /bin/sh
 ### BEGIN INIT INFO
 
-PATH=/usr/local/bin:/sbin:/bin
+export ARG0=$0
+echo ARG0: $ARG0
 
-HOST=192.168.1.100
-PORT=20002
-DIR=/var/racereplay
+#HOST=192.168.1.100
+#HOST=127.0.0.1
+#PORT=20002
+#VENUE="BVCTrack"
 
-mkdir -p "${DIR}"
+DATABASE=$(expr $ARG0 : "/home/\([^/]*\)")
+DIR=$(dirname $ARG0)
 
+ARGS=$(basename $ARG0)
+
+VENUE=$(expr $ARGS : "wtrc-\(.*\)-.*-.*")
+HOST=$(expr $ARGS : "wtrc-.*-\(.*\)-.*")
+PORT=$(expr $ARGS : "wtrc-.*-.*-\(.*\)")
+
+
+echo DATABASE: $DATABASE
+echo DIR: $DIR
+echo ARGS: $ARGS
+echo VENUE: $VENUE
+
+echo HOST: $HOST
+echo PORT: $PORT
+
+
+PATH=$PATH:/home/${DATABASE}/bin
+
+mkdir -p "${DIR}/lapd"
+
+set -x
 case "$1" in
   start|"")
-        /usr/local/bin/wtdb "${HOST}" "${PORT}" "${DIR}"
+        wtdb "${VENUE}" "${HOST}" "${PORT}" "${DIR}"&
 	;;
   stop)
         killall -1 wtdb
