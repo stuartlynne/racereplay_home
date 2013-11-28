@@ -710,14 +710,13 @@ sub do_lap {
            $date, $datestamp, $tagid, $finishms, $startms, $groupms, $GroupDatestamp, $GroupMembers, $GroupMS, $gapms, $batteryflag, $skippedflag if ($DEBUG);
 
 
-    if ($rx eq $LastRX) {
-        printf STDERR "\nDuplicate RX! LastRX: %s RX: %s\n", $LastRX, $rx;
-        printf STDERR "%s: %s finishms: %s startms: %s  groupms: %s Group Datestamp: %s Count: %s MS: %s gapms: %s batteryflag: %d skippedflag: %d\n", 
-               $datestamp, $tagid, $finishms, $startms, $groupms, $GroupDatestamp, $GroupMembers, $GroupMS, $gapms, $batteryflag, $skippedflag if ($DEBUG);
-        return;
-    }
-
-    $LastRX = $rx;
+    #if ($rx eq $LastRX) {
+    #    printf STDERR "\nDuplicate RX! LastRX: %s RX: %s\n", $LastRX, $rx;
+    #    printf STDERR "%s: %s finishms: %s startms: %s  groupms: %s Group Datestamp: %s Count: %s MS: %s gapms: %s batteryflag: %d skippedflag: %d\n", 
+    #           $datestamp, $tagid, $finishms, $startms, $groupms, $GroupDatestamp, $GroupMembers, $GroupMS, $gapms, $batteryflag, $skippedflag if ($DEBUG);
+    #    return;
+    #}
+    #$LastRX = $rx;
 
 
     unless(defined($tagid)) { die "Bad Chip value"; }
@@ -747,6 +746,12 @@ sub do_lap {
     # The startms for this record must be the same as the finishms for the most recent record
     # in the workout. This also updates the chip records.
     #
+    if (defined($Lapms{$tagid})) {
+        printf STDERR "tagid: %s Lapms: %s startms: %s\n", $tagid, $Lapms{$tagid}, $startms;
+    }
+    else {
+        printf STDERR "tagid: %s NO CURRENT LAPMS\n", $tagid;
+    }
     update_workout($dbsql, $tagid, $chipid) if (defined($Lapms{$tagid}) && ($Lapms{$tagid} ne $startms));
 
     # Insert a new workout record if this is a new workout. 

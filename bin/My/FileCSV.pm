@@ -28,27 +28,34 @@ sub print_csv_str {
 
 sub do_csv {
 
-    my ($dbh, $cgi, $startdate, $venue, $event, $name, $chipid) = @_;
+    my ($dbh, $cgi, $startdate, $venue, $name, $chipid) = @_;
 
     my $Venue_ref = Misc::get_venue_info($dbh, $venue);
-    my $Event_info = Misc::get_event_info($dbh, $startdate, $venue, $event);
-
-    print STDERR Dumper($Event_info);
-
-    my $starttime = $Event_info->{'starttime'};
-    my $finishtime = $Event_info->{'finishtime'};
+#    my $Event_info = Misc::get_event_info($dbh, $startdate, $venue, $event);
+#
+#    print STDERR Dumper($Event_info);
+#
+#    my $starttime = $Event_info->{'starttime'};
+#    my $finishtime = $Event_info->{'finishtime'};
 
     #printf STDERR "do_csv: name; %s chipid: %s\n", $name, $chipid;
 
     #printf "Content-Type: application/octet-stream\n";
-    printf $cgi->header( '-Content-Disposition' => sprintf("attachment;filename=\"%s-%s.csv\"", $name, $starttime),
+    printf $cgi->header( '-Content-Disposition' => sprintf("attachment;filename=\"%s-%s.csv\"", $name, $startdate),
             '-Content-Type' => "text/plain");
+    
+#    my $sthl = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
+#            WHERE venueid = (SELECT venueid FROM venues 
+#                WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
+#
+#    $sthl->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%"), $chipid) || die "Execute failed\n";
     
     my $sthl = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
-                WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
+            WHERE venue=?) AND starttime between ? and (? + INTERVAL 1 DAY) ORDER BY starttime ASC");
 
-    $sthl->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%"), $chipid) || die "Execute failed\n";
+    $sthl->execute($venue, $startdate, $startdate) || die "Execute failed\n";
+
 
     my $count = 0;
 

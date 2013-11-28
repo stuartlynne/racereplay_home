@@ -72,15 +72,15 @@ sub do_strava_tcx_process {
 
 
 sub do_strava_tcx {
-    my ($dbh, $cgi, $lapcount, $startdate, $venue, $event, $name, $chipid) = @_;
+    my ($dbh, $cgi, $lapcount, $startdate, $venue, $name, $chipid) = @_;
 
     my $Venue_ref = Misc::get_venue_info($dbh, $venue);
-    my $Event_info = Misc::get_event_info($dbh, $startdate, $venue, $event);
-
-    print STDERR Dumper($Event_info);
-
-    my $starttime = $Event_info->{'starttime'};
-    my $finishtime = $Event_info->{'finishtime'};
+#    my $Event_info = Misc::get_event_info($dbh, $startdate, $venue, $event);
+#
+#    print STDERR Dumper($Event_info);
+#
+#    my $starttime = $Event_info->{'starttime'};
+#    my $finishtime = $Event_info->{'finishtime'};
 
     #my $name = param('name');
     #my $chipid = param('chipid');
@@ -89,20 +89,28 @@ sub do_strava_tcx {
     printf STDERR "do_strava_tcx: name; %s chipid: %s\n", $name, $chipid;
 
     #printf "Content-Type: application/octet-stream\n";
-    printf $cgi->header( '-Content-Disposition' => sprintf("attachment;filename=\"%s-%s.tcx\"", $name, $starttime),
+    printf $cgi->header( '-Content-Disposition' => sprintf("attachment;filename=\"%s-%s.tcx\"", $name, $startdate),
             '-Content-Type' => "text/plain");
+    
+#    my $sthl = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
+#            WHERE venueid = (SELECT venueid FROM venues 
+#                WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
+#
+#    $sthl->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%"), $chipid) || die "Execute failed\n";
     
     my $sthl = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
-                WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
+            WHERE venue=?) AND starttime between ? and (? + INTERVAL 1 DAY) ORDER BY starttime ASC");
 
-    $sthl->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%"), $chipid) || die "Execute failed\n";
+    $sthl->execute($venue, $startdate, $startdate) || die "Execute failed\n";
 
     my $count = 0;
 
     my (%Workouts, %Laps, %TotalMS, %BestLapMS, %StartTime, %FinishTime, %ChipName, %Chips, %ChipIDs);
 
-    my $dt = $date_format->parse_datetime($starttime);
+    #my $dt = $date_format->parse_datetime($starttime);
+    printf STDERR "startdate: %s\n", $startdate;
+    my $dt = $date_format->parse_datetime($startdate. " 00:00:00");
     my $datestr = $dt->strftime("%Y-%m-%dT%H:%M:%SZ");
 
 

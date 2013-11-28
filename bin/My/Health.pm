@@ -52,7 +52,7 @@ sub dodef {
 #
 sub Health::do_health {
 
-    my ($dbh, $cgi, $venue, $startdate, $event, $action) = @_;
+    my ($dbh, $cgi, $venue, $startdate, $action) = @_;
 
     my $chipid = param('chipid'),
 
@@ -139,10 +139,10 @@ sub Health::do_health {
                     $cgi->td($date),
                     $cgi->td($workouts),
                     $cgi->td($activations),
-                    $cgi->td({-bgcolor => $batterycolor},$batt),
-                    $cgi->td({-bgcolor => $correctionscolor},$corrections),
+                    #$cgi->td({-bgcolor => $batterycolor},$batt),
+                    #$cgi->td({-bgcolor => $correctionscolor},$corrections),
                     $cgi->td({-bgcolor => $skippedcountcolor},$skipped),
-                    $cgi->td($batterydate),
+                    #$cgi->td($batterydate),
                     )
             );
 
@@ -155,10 +155,10 @@ sub Health::do_health {
                 $cgi->td(""),
                 $cgi->td($totalworkouts),
                 $cgi->td($totalactivations),
-                $cgi->td(sprintf("%3.0f", $totalbatt / $count)),
-                $cgi->td(sprintf("%3.0f", $totalcorrections / $count)),
+                #$cgi->td(sprintf("%3.0f", $totalbatt / $count)),
+                #$cgi->td(sprintf("%3.0f", $totalcorrections / $count)),
                 $cgi->td(sprintf("%3.0f", $totalskipped / $count)),
-                $cgi->td(""),
+                #$cgi->td(""),
                 )
            );
 
@@ -178,10 +178,10 @@ sub Health::do_health {
                     $cgi->b("Date"), 
                     $cgi->b("Workouts"), 
                     $cgi->b("Laps"), 
-                    $cgi->b("BATT OK (Low is Bad)"), 
-                    $cgi->b("Corrections (High is Bad)"), 
+                    #$cgi->b("BATT OK (Low is Bad)"), 
+                    #$cgi->b("Corrections (High is Bad)"), 
                     $cgi->b("Skipped (High is Bad)"), 
-                    $cgi->b("Last Battery"), 
+                    #$cgi->b("Last Battery"), 
                     ])),
            );
 
@@ -204,15 +204,15 @@ sub Health::do_health {
         $cgi->h2("Total Activations"),
             "The total number of activations the Race Replay system has recorded for this transponder chip.\n",
 
-            $cgi->h2("BATT OK"),
-            "This is the total number of battery OK flags counted. The closer to 100% the better your battery is. \n",
-            "Anything less than 100% indicates that the transponder chip has reported that the battery voltage was low.\n",
-            "When the voltage is near the cutoff (3.0V) this may not happen on every activation, but will still be a warning that the battery will need to be changed soon.\n",
+            #$cgi->h2("BATT OK"),
+            #"This is the total number of battery OK flags counted. The closer to 100% the better your battery is. \n",
+            #"Anything less than 100% indicates that the transponder chip has reported that the battery voltage was low.\n",
+            #"When the voltage is near the cutoff (3.0V) this may not happen on every activation, but will still be a warning that the battery will need to be changed soon.\n",
 
-            $cgi->h2("Corrections"),
-            "This is the number of times that the transponder chip had to re-transmit its ID before the timing system recieved a valid response. \n",
-            "Numbers close to zero are best.\n",
-            "High numbers can indicate two different problems, either that the battery is low or that the transponder chip is not mounted in a good location.\n",
+            #$cgi->h2("Corrections"),
+            #"This is the number of times that the transponder chip had to re-transmit its ID before the timing system recieved a valid response. \n",
+            #"Numbers close to zero are best.\n",
+            #"High numbers can indicate two different problems, either that the battery is low or that the transponder chip is not mounted in a good location.\n",
 
             $cgi->h2("Skipped"),
             "As the timing data is imported into the Race Replay Database it can in some cases recognize if the timing system did not receive an activation message \n",

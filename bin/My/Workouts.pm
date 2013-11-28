@@ -22,18 +22,17 @@ $VERSION        = 1.00;
 # do_summary_workouts
 #
 sub Workouts::do_summary_workouts {
-    my ($dbh, $cgi, $venue, $venueid, $event, $eventid, $startdate, $starttime, $finishtime, $distance) = @_;
+    my ($dbh, $cgi, $venue, $venueid, $startdate, $distance) = @_;
 
     my $total = 0;
 
-    #my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
-    #        WHERE venueid = (SELECT venueid FROM venues 
-    #        WHERE venue=?) AND starttime >= ? and finishtime  <= ? ORDER BY starttime ASC");
+    printf STDERR "do_summary_workouts: startdate: %s starttime: %s\n", $startdate;
+
     my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
-            WHERE venue=?) AND starttime between ? and ? ORDER BY starttime ASC");
+            WHERE venue=?) AND starttime between ? and (? + INTERVAL 1 DAY) ORDER BY starttime ASC");
 
-    $sth->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%")) || die "Execute failed\n";
+    $sth->execute($venue, $startdate, $startdate) || die "Execute failed\n";
 
     my $count = 0;
 
@@ -102,7 +101,7 @@ sub Workouts::do_summary_workouts {
     push(@Content, 
             $cgi->start_form(),
             $cgi->hidden('venue', $venue),
-            $cgi->hidden('event', $event),
+            #$cgi->hidden('event', $event),
             $cgi->hidden('startdate', $startdate),
         );
 
