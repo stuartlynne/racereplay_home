@@ -16,9 +16,13 @@ FILES = $(subst .csv,,${CSV})
 TABLES = $(subst .csv,.tab,$(filter-out lapd-%,${CSV}))
 
 
+#ADMINFILES = organizers.csv users.csv venues.csv chips.csv
+#DAILYFILES = events.csv chiphistory.csv
+#MISCFILES = newbattery.csv
+
 ADMINFILES = organizers.csv users.csv venues.csv chips.csv
-DAILYFILES = events.csv chiphistory.csv
-MISCFILES = newbattery.csv
+DAILYFILES = chiphistory.csv
+MISCFILES = 
 
 
 ADMINTABLES = $(subst .csv,.tab,${ADMINFILES})
