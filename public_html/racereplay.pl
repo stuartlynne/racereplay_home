@@ -47,7 +47,7 @@ BEGIN {
 use My::SqlDef qw(SqlConfig);
 use My::FKey qw(init find finish);
 use My::Health qw(do_health );
-use My::Misc qw(find_chipid get_venue_info get_event_info);
+use My::Misc qw(find_chipid get_venue_info );
 use My::StravaTCX qw(do_strava_tcx);
 use My::FileCSV qw(do_csv);
 use My::Race qw(do_analysis);
@@ -154,44 +154,34 @@ sub dist2ms {
 sub do_summary {
 
 
-    my ($dbh, $cgi, $venue, $startdate, $event) = @_;
+    my ($dbh, $cgi, $venue, $startdate) = @_;
 
     my $Venue_ref = Misc::get_venue_info($dbh, $venue);
-    my $Event_info = Misc::get_event_info($dbh, $startdate, $venue, $event);
 
-    print STDERR Dumper($Event_info);
-    my $eventid = $Event_info->{'eventid'};
-    my $starttime = $Event_info->{'starttime'};
-    my $finishtime = $Event_info->{'finishtime'};
-    my $start = $Event_info->{'start'};
-    my $laps = $Event_info->{'laps'};
-    my $sprints = $Event_info->{'sprints'};
-
-    printf STDERR "do_summary: startdate: %s venue: %s event: %s\n", $startdate, $venue, $event;
+    printf STDERR "do_summary: startdate: %s venue: %s \n", $startdate, $venue;
 
     my $venueid = -1;
-    my $organizer = "";
+    #my $organizer = "";
     my $distance = "";
-    my $minspeed = 0;
-    my $maxspeed = 0;
-    my $mintime = 0;
-    my $maxtime = 0;
-    my $gaptime = 0;
+    #my $minspeed = 0;
+    #my $maxspeed = 0;
+    #my $mintime = 0;
+    #my $maxtime = 0;
+    #my $gaptime = 0;
 
     if ($Venue_ref) {
         $venueid = $Venue_ref->{'venueid'};
-        $organizer = $Venue_ref->{'organizer'};
+        #$organizer = $Venue_ref->{'organizer'};
         $distance = $Venue_ref->{'distance'};
-        $minspeed = $Venue_ref->{'minspeed'};
-        $maxspeed = $Venue_ref->{'maxspeed'};
-        $gaptime = $Venue_ref->{'gaptime'} * 1000;
-        $mintime = dist2ms($distance, $maxspeed);
-        $maxtime = dist2ms($distance, $minspeed);
+        #$minspeed = $Venue_ref->{'minspeed'};
+        #$maxspeed = $Venue_ref->{'maxspeed'};
+        #$gaptime = $Venue_ref->{'gaptime'} * 1000;
+        #$mintime = dist2ms($distance, $maxspeed);
+        #$maxtime = dist2ms($distance, $minspeed);
     }
 
     my @Content;
-    push(@Content, Workouts::do_summary_races($dbh, $cgi, $venue, $venueid, $event, $eventid, $startdate, $starttime, $finishtime, $distance));
-    push(@Content, Workouts::do_summary_workouts($dbh, $cgi, $venue, $venueid, $event, $eventid, $startdate, $starttime, $finishtime, $distance));
+    push(@Content, Workouts::do_summary_workouts($dbh, $cgi, $venue, $venueid, $startdate, $distance));
 
     push(@Content, 
             $cgi->br(),
@@ -208,13 +198,13 @@ sub do_summary {
             $cgi->p($cgi->em("[Details]"), "Show more details for the selected workouts."),
             $cgi->p($cgi->em("[Restart Form]"), "Start over."),
             #$cgi->p($cgi->em("[Analyze Race]"), "The second table shows possible race starts, this button will generate a report for selected races."),
-            $cgi->p($cgi->em("[Correction]"), "The Laps column shows the maximum recorded laps, this may be too high, use the correction menu to adjust down if required."),
+            #$cgi->p($cgi->em("[Correction]"), "The Laps column shows the maximum recorded laps, this may be too high, use the correction menu to adjust down if required."),
             $cgi->p($cgi->em("[Type]"), "Select the type of race."),
             $cgi->p($cgi->em("[Sprints]"), "The number between sprints. For lap races this will also be used to help set the table width."),
 
         );
 
-    return do_page($dbh, $cgi, sprintf ("%s - %s", $event, $startdate), "", \@Content, \@Aside);
+    return do_page($dbh, $cgi, sprintf ("%s - %s", "Workouts", $startdate), "", \@Content, \@Aside);
 }
 
 # ################################################################################################################### #
@@ -283,17 +273,22 @@ sub select_date_form {
 
     my ($dbh, $cgi, $venue) = @_;
 
-    my $sth = $dbh->prepare("SELECT DISTINCT starttime FROM events WHERE venueid = (SELECT venueid FROM venues WHERE venue=?) ORDER BY starttime");
-    $sth->execute($venue) || die "Execute failed\n";
-    my $ref = $sth->fetchall_hashref( 'starttime' );
+
+    my $sth = $dbh->prepare("SELECT DISTINCT DATE_FORMAT(w.starttime, '%Y-%m-%d %a') as STARTTIME FROM workouts w ORDER BY w.starttime DESC");
+    $sth->execute() || die "Execute failed\n";
+    #my $row = $sth->fetchrow_hashref(); 
+    my $ref = $sth->fetchall_hashref( 'STARTTIME' );
     $sth->finish();
 
     my %Days;
     foreach my $key (keys %$ref) { 
         #printf STDERR "select_date: %s\n", $key;
-        my $startdt = $date_format->parse_datetime($key) || die $DateTime::Format::Strptime::errmsg;
-        $Days{$startdt->strftime("%Y-%m-%d")} = $startdt->strftime("%Y-%m-%d %a");
+        #my $startdt = $date_format->parse_datetime($key) || die $DateTime::Format::Strptime::errmsg;
+        my $startdt = $key;
+        $startdt =~ s/ ...//;
+        $Days{$startdt} = $key;
     }
+    printf STDERR Dumper(%Days);
 
     my %Labels;
     my @Values;
@@ -332,98 +327,18 @@ sub select_date_form {
 
 # ################################################################################################################### #
 
-# select_event_form
-#
-sub select_event_form {
-
-    my ($dbh, $cgi, $venue, $startdate) = @_;
-
-    my %Labels;
-    my $Count = 0;
-    my @Values;
-
-    my $sth = $dbh->prepare("SELECT * FROM events WHERE starttime LIKE ?");
-    $sth->execute(sprintf("%s%s", $startdate, "%")) || die "Execute failed\n";
-
-    while(my $row = $sth->fetchrow_hashref()) {
-
-        my $description = $row->{'description'};
-        my $starttime = $row->{'starttime'};
-        my $finishtime = $row->{'finishtime'};
-        my $laps = $row->{'laps'};
-        my $sprints = $row->{'sprints'};
-
-        my $startdt = $date_format->parse_datetime($starttime) || die $DateTime::Format::Strptime::errmsg;
-        my $finishdt = $date_format->parse_datetime($finishtime) || die $DateTime::Format::Strptime::errmsg;
-        $starttime = $startdt->strftime("%H:%M");
-        $finishtime = $finishdt->strftime("%H:%M");
-
-        my $val = "";
-
-        if (defined($finishtime) && $finishtime ne "") {
-            $val = sprintf("%s %s-%s", $description, $starttime, $finishtime);
-
-        }
-        elsif(defined($laps) && $laps ne "") {
-            if(defined($sprints) && $sprints ne "") {
-                $val = sprintf("%s %s %s", $description, $starttime, $laps, $sprints);
-            }
-            else {
-                $val = sprintf("%s %s", $description, $starttime, $laps);
-            }
-        }
-        else {
-            $val = sprintf("%s", $description);
-        } 
-        $Values[$Count++] = $description;
-        $Labels{$description} = $val;
-    } 
-    $sth->finish();
-
-    my @Content;
-    my @Aside;
-    push(@Content, 
-                $cgi->start_form(),
-
-                $cgi->em(sprintf("<em>Event Selection - %s - %s", $venue, $startdate)),
-                $cgi->br(),
-                $cgi->popup_menu(
-                    -name => 'Selected Event',
-                    -values => [@Values],
-                    -linebreak => 'true',
-                    -labels => \%Labels,
-                    ),
-
-                $cgi->submit('action','Event Selected'),
-                $cgi->hidden('venue', $venue),
-                $cgi->hidden('startdate', $startdate),
-
-                $cgi->hr(),
-                    $cgi->reset("Defaults"),
-                    $cgi->defaults('Restart form'),
-                    $cgi->end_form(),
-        );
-    push(@Aside,
-            $cgi->p($cgi->em("[Event Selected]"), "Select the event or workout time."),
-            $cgi->p($cgi->em("[Reset Form]"), "Start over."),
-            );
-    return do_page($dbh, $cgi, "Select Event", "", \@Content, \@Aside, );
-}
-
-# ################################################################################################################### #
-
 # do_workouts
 #
 sub do_workouts {
 
-    my ($dbh, $cgi, $count, $startdate, $venue, $description, $name, $chipid, $starttime, $finishtime, $start, $laps, $sprints) = @_;
+    my ($dbh, $cgi, $count, $startdate, $venue, $name, $chipid) = @_;
 
     my @Content;
 
 
     unless ($count) {
         push(@Content, 
-                $cgi->h1(sprintf ("%s - %s", $description, $startdate))
+                $cgi->h1(sprintf ("%s - %s", "Workouts", $startdate))
             );
     }
 
@@ -431,7 +346,6 @@ sub do_workouts {
     push(@Content, 
             $cgi->start_form(),
             $cgi->hidden('venue', $venue),
-            $cgi->hidden('event', $description),
             $cgi->hidden('startdate', $startdate),
             $cgi->hidden('name', $name),
             $cgi->hidden('chipid', $chipid),
@@ -450,8 +364,8 @@ sub do_workouts {
                     $cgi->b("Avg (kph"), 
                     $cgi->b("Fastest"), 
                     $cgi->b("Best Lap (kph)"),
-                    $cgi->b("Batt"),
-                    $cgi->b("Corr"),
+                    #$cgi->b("Batt"),
+                    #$cgi->b("Corr"),
                     $cgi->b("Skipped"),
                     $cgi->b("Select"),
                     ]))
@@ -459,32 +373,37 @@ sub do_workouts {
 
 
     my $Venue_ref = Misc::get_venue_info($dbh, $venue);
-    my $organizer = "";
+    #my $organizer = "";
     my $distance = "";
-    my $minspeed = 0;
-    my $maxspeed = 0;
-    my $mintime = 0;
-    my $maxtime = 0;
-    my $gaptime = 0;
+    #my $minspeed = 0;
+    #my $maxspeed = 0;
+    #my $mintime = 0;
+    #my $maxtime = 0;
+    #my $gaptime = 0;
 
     if ($Venue_ref) {
-        $organizer = $Venue_ref->{'organizer'};
+        #$organizer = $Venue_ref->{'organizer'};
         $distance = $Venue_ref->{'distance'};
-        $minspeed = $Venue_ref->{'minspeed'};
-        $maxspeed = $Venue_ref->{'maxspeed'};
-        $gaptime = $Venue_ref->{'gaptime'} * 1000;
-        $mintime = dist2ms($distance, $maxspeed);
-        $maxtime = dist2ms($distance, $minspeed);
+        #$minspeed = $Venue_ref->{'minspeed'};
+        #$maxspeed = $Venue_ref->{'maxspeed'};
+        #$gaptime = $Venue_ref->{'gaptime'} * 1000;
+        #$mintime = dist2ms($distance, $maxspeed);
+        #$maxtime = dist2ms($distance, $minspeed);
     }
 
 
     my $total = 0;
 
+    #my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
+    #        WHERE venueid = (SELECT venueid FROM venues 
+    #            WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
+    
     my $sth = $dbh->prepare("SELECT * FROM workouts l JOIN chips c ON l.chipid = c.chipid
             WHERE venueid = (SELECT venueid FROM venues 
-                WHERE venue=?) AND starttime >= ? and finishtime  <= ? and l.chipid = ? ORDER BY starttime ASC");
+                WHERE venue=?) AND (starttime BETWEEN ? AND (? + INTERVAL 1 DAY )) AND l.chipid = ? ORDER BY starttime ASC");
 
-    $sth->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%"), $chipid) || die "Execute failed\n";
+    #$sth->execute($venue, sprintf("%s%s", $starttime, "%"), sprintf("%s%s", $finishtime, "%"), $chipid) || die "Execute failed\n";
+    $sth->execute($venue, $startdate, $startdate, $chipid) || die "Execute failed\n";
 
     #my $count = 0;
 
@@ -558,8 +477,8 @@ sub do_workouts {
                     $cgi->td(sprintf("%5.1f", Misc::kph(($laps * $distance), $row->{'totalms'}))),
                     $cgi->td(sprintf("%5.1f", $bestlapms/1000)),
                     $cgi->td(sprintf("%5.1f", Misc::kph(($distance), $bestlapms))),
-                    $cgi->td($row->{'battery'}),
-                    $cgi->td($row->{'corrections'}),
+                    #$cgi->td($row->{'battery'}),
+                    #$cgi->td($row->{'corrections'}),
                     $cgi->td($row->{'skippedcount'}),
                     $cgi->td(checkbox(sprintf("workoutid-%s-%s", $starttime, $finishtime),0, $row->{'workoutid'},""))
                     ));
@@ -576,9 +495,9 @@ sub do_workouts {
             $cgi->submit('action',"Strava Workouts"),
             $cgi->submit('action',"Workout CSV"),
             $cgi->submit('action',"Chip Health"),
-            $cgi->submit('action',"Compare"),
-            "Laps:",
-            $cgi->textfield(-name => 'laps', -value => $MaxLaps, -size => 10, -maxlength => 20),
+            #$cgi->submit('action',"Compare"),
+            #"Laps:",
+            #$cgi->textfield(-name => 'laps', -value => $MaxLaps, -size => 10, -maxlength => 20),
             $cgi->end_form(),
             $cgi->hr(),
         );
@@ -592,17 +511,10 @@ sub do_workouts {
 #
 sub do_details {
 
-    my ($dbh, $cgi, $venue, $startdate, $event, $action) = @_;
+    my ($dbh, $cgi, $venue, $startdate, $action) = @_;
 
-    printf STDERR "do_event: venue: %s date: %s event: %s action: %s\n", $venue, $startdate, $event, $action if ($DEBUG);
+    printf STDERR "do_details: venue: %s date: %s action: %s\n", $venue, $startdate, $action if ($DEBUG);
     
-    my $sth = $dbh->prepare("SELECT * FROM events WHERE venueid = (SELECT venueid FROM venues WHERE venue=?) AND starttime LIKE ? AND description LIKE ?");
-
-    $sth->execute($venue, sprintf("%s%s", $startdate, "%"), $event) || die "Execute failed\n";
-    my $row = $sth->fetchrow_hashref();
-    $sth->finish();
-    unless(defined($row)) { die "Cannot find event!\n"; }
-
     printf STDERR "Action: %s\n", $action;
     printf STDERR "Details\n";
 
@@ -623,14 +535,9 @@ sub do_details {
                 do_workouts ($dbh, $cgi, $workoutcount++,
                     $startdate,
                     $venue, 
-                    $event,
                     $key,
-                    $parameter,
-                    $row->{'starttime'}, 
-                    $row->{'finishtime'}, 
-                    $row->{'start'}, 
-                    $row->{'laps'}, 
-                    $row->{'sprints'})
+                    $parameter
+                    )
             );
     }
 
@@ -647,7 +554,7 @@ sub do_details {
             $cgi->h2("Strava TCX 5"),
             $cgi->p(
                 "This will generate a TCX file suitable for Strava with the the TCX \"lap\" being set to 5 recorded laps.\n",
-                "For files from Burnaby Velodrome this can make the Strava Performance Analysis work better as it is working with 1km insteadm of 200m\n",
+                "For files from Burnaby Velodrome this can make the Strava Performance Analysis work better as it is working with 1km insteadm of 200m.\n",
                 ),
 
             $cgi->h2("Strava TCX Workouts"),
@@ -655,14 +562,14 @@ sub do_details {
 
 
             $cgi->h2("Workout CSV"),
-            $cgi->p("This will generate a CSV file containing the raw workout data. This can be imported into Excel or OpenOffice for further analysis\n"),
+            $cgi->p("This will generate a CSV file containing the raw workout data. This can be imported into Excel or OpenOffice for further analysis.\n"),
 
 
             $cgi->h2("Chip Health"),
-            $cgi->p("This will generate a Chip Health Report. This shows the battery flag status, corrections, and possibly skipped laps for a transponder chip\n"),
+            $cgi->p("This will generate a Chip Health Report. This shows the possibly skipped laps for an RFID tag.\n"),
 
-            $cgi->h2("Compare"),
-            $cgi->p("This will generate a comparison report.\n"),
+            #$cgi->h2("Compare"),
+            #$cgi->p("This will generate a comparison report.\n"),
             );
 
     return do_page($dbh, $cgi, "Details", "", \@Content, \@Aside);
@@ -675,7 +582,7 @@ sub do_details {
 #
 sub do_compare {
 
-    my ($dbh, $cgi, $venue, $startdate, $event, $action) = @_;
+    my ($dbh, $cgi, $venue, $startdate, $action) = @_;
 
     printf STDERR "Action: %s\n", $action;
 
@@ -723,29 +630,29 @@ sub do_compare {
 #
 sub do_file {
 
-    my ($dbh, $cgi, $venue, $startdate, $event, $action) = @_;
+    my ($dbh, $cgi, $venue, $startdate, $action) = @_;
 
     my $name = param('name');
     my $chipid = param('chipid');
     
     if ($action eq "Workout CSV") {
         printf STDERR "Workout CSV\n";
-        FileCSV::do_csv ($dbh, $cgi, $startdate, $venue, $event, $name, $chipid);
+        FileCSV::do_csv ($dbh, $cgi, $startdate, $venue, $name, $chipid);
     }
 
     if ($action eq "Strava TCX") {
         printf STDERR "Strava TCX\n";
-        StravaTCX::do_strava_tcx ($dbh, $cgi, 1, $startdate, $venue, $event, $name, $chipid);
+        StravaTCX::do_strava_tcx ($dbh, $cgi, 1, $startdate, $venue, $name, $chipid);
     }
 
     if ($action eq "Strava TCX 5") {
         printf STDERR "Strava TCX 5\n";
-        StravaTCX::do_strava_tcx ($dbh, $cgi, 5, $startdate, $venue, $event, $name, $chipid);
+        StravaTCX::do_strava_tcx ($dbh, $cgi, 5, $startdate, $venue, $name, $chipid);
     }
 
     if ($action eq "Strava Workouts") {
         printf STDERR "Strava Workouts\n";
-        StravaTCX::do_strava_tcx ($dbh, $cgi, 0, $startdate, $venue, $event, $name, $chipid);
+        StravaTCX::do_strava_tcx ($dbh, $cgi, 0, $startdate, $venue, $name, $chipid);
     }
 }
 
@@ -778,26 +685,14 @@ sub do_work {
         }
     }
 
-    # get event
+    # produce summary
     #
     if ($action eq "Date Selected") {
         if (defined(param('Selected Date')) && defined(param('venue'))) {
             #printf STDERR "Selected Date: %s\n", param('Selected Date'), $TZ if ($DEBUG);
             my $venue = param('venue');
             my $startdate = param('Selected Date');
-            print select_event_form($dbh, $cgi, $venue, $startdate);
-            return;
-        }
-    }
-
-    # produce summary
-    #
-    if ($action eq "Event Selected") {
-        if (defined(param('Selected Event')) && defined(param('venue') && defined(param('startdate')))) {
-            my $venue = param('venue');
-            my $startdate = param('startdate');
-            my $event = param('Selected Event');
-            print do_summary($dbh, $cgi, $venue, $startdate, $event);
+            print do_summary($dbh, $cgi, $venue, $startdate);
             return;
         }
     }
@@ -805,11 +700,10 @@ sub do_work {
     # Detail Report 
     #
     if ( $action eq "Details" ) {
-        if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
+        if (defined(param('venue') && defined(param('startdate')))) {
             my $venue = param('venue');
             my $startdate = param('startdate');
-            my $event = param('event');
-            print do_details($dbh, $cgi, $venue, $startdate, $event, $action);
+            print do_details($dbh, $cgi, $venue, $startdate, $action);
             return;
         }
     }
@@ -817,22 +711,20 @@ sub do_work {
     # Race Report 
     #
 #   if ( $action eq "Analyze Race" ) {
-#       if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
+#       if (defined(param('venue') && defined(param('startdate')))) {
 #           my $venue = param('venue');
 #           my $startdate = param('startdate');
-#           my $event = param('event');
-#           print do_analyze_races($dbh, $cgi, $venue, $startdate, $event, $action);
+#           print do_analyze_races($dbh, $cgi, $venue, $startdate, $action);
 #           return;
 #       }
 #   }
 
     if ($action eq "Chip Health") {
-        if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
+        if (defined(param('venue') && defined(param('startdate')))) {
             my $venue = param('venue');
             my $startdate = param('startdate');
-            my $event = param('event');
 
-            my ($Content_ref, $Aside_ref) = Health::do_health($dbh, $cgi, $venue, $startdate, $event, $action);
+            my ($Content_ref, $Aside_ref) = Health::do_health($dbh, $cgi, $venue, $startdate, $action);
             my @Content = @$Content_ref;
             my @Aside = @$Aside_ref;
             print do_page($dbh, $cgi, "Transponder Chip Health", "", \@Content, \@Aside);
@@ -840,15 +732,14 @@ sub do_work {
         }
     }
 
-    if ($action eq "Compare") {
-        if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
-            my $venue = param('venue');
-            my $startdate = param('startdate');
-            my $event = param('event');
-            print do_compare($dbh, $cgi, $venue, $startdate, $event, $action);
-            return;
-        }
-    }
+#    if ($action eq "Compare") {
+#        if (defined(param('venue') && defined(param('startdate')))) {
+#            my $venue = param('venue');
+#            my $startdate = param('startdate');
+#            print do_compare($dbh, $cgi, $venue, $startdate, $action);
+#            return;
+#        }
+#    }
 
     if (
             $action eq "Strava TCX" || 
@@ -856,11 +747,10 @@ sub do_work {
             $action eq "Strava Workouts" || 
             $action eq "Workout CSV" ) 
     {
-        if (defined(param('event')) && defined(param('venue') && defined(param('startdate')))) {
+        if (defined(param('venue') && defined(param('startdate')))) {
             my $venue = param('venue');
             my $startdate = param('startdate');
-            my $event = param('event');
-            do_file($dbh, $cgi, $venue, $startdate, $event, $action);
+            do_file($dbh, $cgi, $venue, $startdate, $action);
             return;
         }
     }
